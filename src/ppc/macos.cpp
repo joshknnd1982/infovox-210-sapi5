@@ -521,7 +521,47 @@ void MacRuntime::impSndPlayDoubleBuffer() {
     dbl_.buffers[0] = rd32(hdr + 12);
     dbl_.buffers[1] = rd32(hdr + 16);
     dbl_.doubleBackProc = rd32(hdr + 20);
+    dbBytesPerFrame_ = uint32_t(dbl_.channels) * uint32_t(dbl_.sampleSize / 8);
+    if (dbBytesPerFrame_ == 0) dbBytesPerFrame_ = 2;
+
+    // Watch stores into the sound data so a callback can be placed within the
+    // buffer it interrupts.  The range covers both buffers; hookBufWrite
+    // ignores anything outside the one currently being filled.
+    if (!dbHookInstalled_ && dbl_.buffers[0] && dbl_.buffers[1]) {
+        uint32_t lo = dbl_.buffers[0] < dbl_.buffers[1] ? dbl_.buffers[0] : dbl_.buffers[1];
+        uint32_t hi = dbl_.buffers[0] < dbl_.buffers[1] ? dbl_.buffers[1] : dbl_.buffers[0];
+        uint32_t span = hi - lo;
+        if (span > 0x40000) span = 0x40000;
+        uc_hook h;
+        if (uc_hook_add(uc_, &h, UC_HOOK_MEM_WRITE,
+                        (void*)&MacRuntime::hookBufWriteTramp, this,
+                        lo, uint64_t(hi) + span) == UC_ERR_OK)
+            dbHookInstalled_ = true;
+    }
+    beginBufferFill(dbl_.buffers[0]);
     setGpr(3, 0);
+}
+
+void MacRuntime::beginBufferFill(uint32_t buffer) {
+    dbFillBase_ = buffer + kDbHeaderSize;
+    // The engine never writes more than one buffer's worth; the far buffer
+    // bounds this one, and 256 KB caps it when they are not adjacent.
+    uint32_t other = buffer == dbl_.buffers[0] ? dbl_.buffers[1] : dbl_.buffers[0];
+    uint32_t limit = (other > buffer && other - buffer < 0x40000) ? other : buffer + 0x40000;
+    dbFillLimit_ = limit;
+    dbWriteFrames_ = 0;
+}
+
+void MacRuntime::hookBufWriteTramp(uc_engine*, uc_mem_type, uint64_t addr, int size,
+                                   int64_t, void* user) {
+    static_cast<MacRuntime*>(user)->hookBufWrite(addr, size);
+}
+
+void MacRuntime::hookBufWrite(uint64_t addr, int size) {
+    if (!dbFillBase_ || addr < dbFillBase_ || addr >= dbFillLimit_) return;
+    uint32_t end = uint32_t(addr - dbFillBase_) + uint32_t(size > 0 ? size : 0);
+    uint32_t frames = (end + dbBytesPerFrame_ - 1) / dbBytesPerFrame_;
+    if (frames > dbWriteFrames_) dbWriteFrames_ = frames;
 }
 
 // ---------------------------------------------------------- Mixed Mode -----
@@ -548,7 +588,7 @@ void MacRuntime::impCallUniversalProc() {
     if (upp >= kCodeBase) magic = rd16(upp);
     if (magic != 0xAAFE) {
         // A Speech Manager client callback: record it and return 0.
-        callbacks_.push_back({upp, {gpr(5), gpr(6), gpr(7), gpr(8)}});
+        callbacks_.push_back({upp, {gpr(5), gpr(6), gpr(7), gpr(8)}, dbWriteFrames_});
         setGpr(3, 0);
         return;
     }

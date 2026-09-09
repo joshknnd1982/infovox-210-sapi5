@@ -5,7 +5,7 @@
 ; resource pack per language the user chooses.
 
 #define AppName "Infovox 210 SAPI5"
-#define AppVersion "1.3.0"
+#define AppVersion "1.4.0"
 #define AppPublisher "Infovox 210 SAPI5 project"
 #define SourceDir "..\output"
 

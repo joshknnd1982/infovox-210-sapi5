@@ -1,24 +1,43 @@
-// Consonant clarity: puts back the band the 1996 engine cannot synthesise.
+// Consonant clarity: puts back the frication the 1996 engine does not produce.
 //
-// Infovox 210 runs its formant synthesizer at roughly 8 kHz internally and
-// resamples to 22050 for output, so the signal is hard band-limited at about
-// 4 kHz (measured: -100 dB by 4.5 kHz).  The engine has no parameter that
-// changes this, and Gestalt answers make no difference.  Sibilants live at
-// 4-8 kHz, which is why /s/, /f/, /h/ and /th/ arrive almost inaudible and are
-// easy to confuse with one another.
+// What the engine actually does, measured on its own output:
 //
-// Two things happen here.  First a high shelf lifts everything above 2.6 kHz,
-// which is where the engine puts what fricative energy it has; measured over a
-// sentence the engine's own spectrum falls from 0.079 %/Hz at 0-500 Hz to
-// 0.0045 %/Hz at 3-4 kHz, so consonants really are buried.  Then the octave
-// above the ceiling is regenerated as shaped noise, scaled by the level of the
-// band that did survive.  A gate on noisiness alone cannot find the fricatives
-// (this engine's vowels are nearly as bright as its /s/), so the regenerated
-// band simply tracks what is there, which is what a band extension should do.
+//   * It emits no frication at all.  Rendered on the American male voice, the
+//     first 50 ms of "see", "fee", "thief", "he" and "heed" have the same
+//     spectrum to within 2 dB and the same glottal pulse train at F0 -- the
+//     engine substitutes voicing wherever a voiceless fricative belongs.  Its
+//     own aspiration control ('aspi') confirms it: raising it scales the voice
+//     down and adds nothing, and at full scale the output is digital silence,
+//     which is what a synthesizer sounds like when its noise source returns
+//     zero.  Inside the emulated synthesizer six of the twenty-three per-sample
+//     filter states -- one whole resonator branch -- stay at exactly 0.0 for an
+//     entire utterance.
+//
+//   * So the audio carries no cue to where the fricatives are.  Four different
+//     detectors were measured over a 39-phone inventory (high-band ratio, high
+//     band against 0-700 Hz, high band against 300-1200 Hz, and aperiodicity):
+//     none separated /s/ /S/ /f/ /T/ /h/ from the vowels.  The best margin was
+//     0.72x -- worse than chance.  The previous version of this file gated on
+//     high-band ratio and, measured per phone, opened further on /aI/ (0.48),
+//     /eI/ (0.42) and /m/ (peak 0.93) than on /s/ (0.19) or /S/ (0.34), while
+//     giving /z/ /v/ /Z/ /D/ nothing at all.  It was putting its noise on the
+//     diphthongs and the nasals.
+//
+// The engine does, however, say what it is speaking: it fires a phoneme
+// callback per phone, and each language pack carries its own symbol table.  So
+// the frication is scheduled from that stream instead of guessed from the
+// audio.  The caller classifies each phoneme symbol (see infovox.cpp) and hands
+// the class in with a sample-accurate offset; this file synthesises the noise.
+//
+// Two fixed noise bands are mixed rather than retuning a filter per phone: a
+// retune inside an utterance clicks, a crossfade does not.  Levels follow a
+// slow envelope of the engine's own speech, so frication tracks the voice,
+// the volume setting and the speaking rate without further calibration.
 #pragma once
 
 #include <cmath>
 #include <cstdint>
+#include <vector>
 
 namespace ppc {
 
@@ -101,41 +120,89 @@ private:
     double r_ = 0.9929, x1_ = 0.0, y1_ = 0.0;
 };
 
+// What kind of noise a phoneme needs.  The caller maps each language's own
+// symbols onto these; anything not listed is Voiced, which makes no noise.
+enum class Fric : uint8_t {
+    Voiced = 0,   // vowels, nasals, glides, voiced stops: nothing to add
+    S,            // /s/          sharp, high
+    Z,            // /z/          the same band, half level: it is partly voiced
+    Sh,           // /S/ /tS/     lower and broader than /s/
+    Zh,           // /Z/ /dZ/
+    F,            // /f/          weak, flat, spread wide
+    V,            // /v/
+    Th,           // /T/          weaker still
+    Dh,           // /D/
+    H,            // /h/          breathy, low, shaped like the vowel it leads
+    X,            // German ach-Laut, Swedish sj, Spanish jota
+    Burst,        // /p/ /t/ /k/ release
+};
+
 class ConsonantClarity {
 public:
     // amount: 0..100.  0 leaves the engine's output untouched.
     void configure(double sampleRate, int amount) {
+        fs_ = sampleRate;
         amount_ = amount < 0 ? 0 : amount > 100 ? 100 : amount;
         double a = double(amount_) / 100.0;
-        gain_ = 3.0 * a;
-        shelf_.highShelf(sampleRate, 2600.0, 12.0 * a);
+        gain_ = 1.35 * a;
+        shelf_.highShelf(sampleRate, 2600.0, 9.0 * a);
         // The shelf adds energy, so trim back to keep peaks where they were.
-        makeup_ = 1.0 / (1.0 + 0.35 * a);
-        srcHp_.highpass(sampleRate, 2300.0);
-        // Shape the new noise into a sibilant band rather than letting two
-        // cascaded high-passes tilt it up into a hiss at the top of the range.
-        outHp_[0].highpass(sampleRate, 4500.0);
-        outHp_[1].lowpass(sampleRate, 9000.0);
-        wideHp_.highpass(sampleRate, 2300.0);
-        // ~4 ms attack/release on the noisiness gate: fast enough to catch a
-        // short fricative, slow enough not to chatter inside one.
-        double tc = std::exp(-1.0 / (0.004 * sampleRate));
-        smooth_ = tc;
-        env_ = envHp_ = 0.0;
-        gate_ = 0.0;
+        makeup_ = 1.0 / (1.0 + 0.30 * a);
+
+        // Two fixed noise bands, crossfaded per phone.  Between them they span
+        // 1.6 kHz to the top of the band, which is where every fricative this
+        // engine has to make lives.
+        lowBand_[0].highpass(sampleRate, 1900.0);
+        lowBand_[1].lowpass(sampleRate, 5200.0);
+        highBand_[0].highpass(sampleRate, 4200.0);
+        highBand_[1].lowpass(sampleRate, 9500.0);
+
+        // Envelope of the engine's own speech, used as the level reference so
+        // frication scales with the voice without further calibration.  The
+        // long release is what makes it a reference rather than a waveform
+        // follower: a 4 ms envelope swings from zero to full inside a single
+        // glottal period, and noise multiplied by that buzzes.
+        speechUp_   = 1.0 - std::exp(-1.0 / (0.030 * sampleRate));
+        speechDown_ = 1.0 - std::exp(-1.0 / (0.400 * sampleRate));
+        // Onset and offset of one phone's noise.  Both are short -- a fricative
+        // starts and stops abruptly -- and the offset is the shorter of the
+        // two, so nothing trails into the silence of a following stop closure.
+        attack_  = 1.0 - std::exp(-1.0 / (0.005 * sampleRate));
+        release_ = 1.0 - std::exp(-1.0 / (0.0022 * sampleRate));
+
         rng_ = 22050;
         dc_.configure(sampleRate);
+        beginUtterance();
         reset();
     }
 
     bool active() const { return amount_ > 0; }
 
     void reset() {
-        srcHp_.reset(); outHp_[0].reset(); outHp_[1].reset(); wideHp_.reset();
+        lowBand_[0].reset(); lowBand_[1].reset();
+        highBand_[0].reset(); highBand_[1].reset();
         shelf_.reset();
         dc_.reset();
-        env_ = envHp_ = 0.0;
-        gate_ = 0.0;
+        speech_ = peak_ = 0.0;
+        curGain_ = curMix_ = 0.0;
+    }
+
+    // Clears the phoneme schedule and the playback position.  Call once per
+    // utterance, before the first buffer.
+    void beginUtterance() {
+        sched_.clear();
+        next_ = 0;
+        pos_ = 0;
+        target_ = Fric::Voiced;
+        phoneEnd_ = 0;
+    }
+
+    // A phoneme starts at `sampleOffset` frames into the utterance.  Offsets
+    // must not go backwards; anything already played is dropped.
+    void addPhoneme(uint64_t sampleOffset, Fric kind) {
+        if (!sched_.empty() && sampleOffset < sched_.back().at)
+            sampleOffset = sched_.back().at;
+        sched_.push_back({sampleOffset, kind});
     }
 
     // In place, one buffer at a time; filter state carries across buffers so
@@ -146,48 +213,140 @@ public:
         if (!active()) {
             for (size_t i = 0; i < count; ++i) {
                 double y = dc_.process(double(samples[i]));
-                samples[i] = int16_t(y > 32767.0 ? 32767 : y < -32768.0 ? -32768 : y);
+                samples[i] = clip(y);
+                ++pos_;
             }
             return;
         }
         for (size_t i = 0; i < count; ++i) {
             double x = shelf_.process(dc_.process(double(samples[i])));
 
-            // How noise-like is this instant?  Fricatives put a large share of
-            // their energy above 2.3 kHz; vowels put very little there.
-            double hp = wideHp_.process(x);
-            env_ = env_ * smooth_ + std::fabs(x) * (1.0 - smooth_);
-            envHp_ = envHp_ * smooth_ + std::fabs(hp) * (1.0 - smooth_);
-            double ratio = envHp_ / (env_ + 1e-9);
-            double want = (ratio - 0.12) / 0.30;
-            want = want < 0.0 ? 0.0 : want > 1.0 ? 1.0 : want;
-            gate_ = gate_ * smooth_ + want * (1.0 - smooth_);
+            // Track the engine's own loudness: fast up so a phrase starts on
+            // time, slow down so the reference does not follow every glottal
+            // period.  Multiplying noise by a rippling envelope is what made
+            // the old version buzz.
+            double mag = std::fabs(x);
+            speech_ += (mag - speech_) * (mag > speech_ ? speechUp_ : speechDown_);
+            if (speech_ > peak_) peak_ = speech_;
 
-            // A fricative *is* noise, so the honest way to restore the octave
-            // the synthesizer could not reach is to make noise there and give
-            // it the level and timing of the band that did survive.  Folding
-            // the low band up by rectification was far too quiet to help.
-            double n = noise();
-            double band = outHp_[1].process(outHp_[0].process(n));
-            double y = (x + gain_ * gate_ * envHp_ * band) * makeup_;
-            samples[i] = int16_t(y > 32767.0 ? 32767 : y < -32768.0 ? -32768 : y);
+            // A voiceless fricative can be pure digital silence in this engine
+            // -- the /s/ that opens a Danish sentence measures 20 counts rms --
+            // so the level reference cannot come from the audio alone or the
+            // first consonant of an utterance would get nothing.  The floor is
+            // about a third of ordinary speech, and real speech overrides it
+            // within 30 ms of the utterance starting.
+            double ref = speech_ > kLevelFloor ? speech_ : kLevelFloor;
+            // Once the utterance is well and truly over, stop: the last phone
+            // has no successor to switch the schedule, and trailing silence
+            // must stay silent.
+            double duck = peak_ > 0.0 ? speech_ / (0.05 * peak_) : 1.0;
+            if (duck > 1.0) duck = 1.0;
+
+            // Advance the phoneme schedule.
+            while (next_ < sched_.size() && sched_[next_].at <= pos_) {
+                target_ = sched_[next_].kind;
+                phoneEnd_ = pos_ + maxRun(target_);
+                ++next_;
+            }
+            // A phone that outlives its plausible duration stops: the engine
+            // may follow it with silence and no further callback.
+            Fric want = (pos_ >= phoneEnd_) ? Fric::Voiced : target_;
+
+            double wantGain = 0.0, wantMix = 0.0;
+            shapeOf(want, &wantGain, &wantMix);
+            wantGain *= duck;
+            curGain_ += (wantGain - curGain_) * (wantGain > curGain_ ? attack_ : release_);
+            curMix_  += (wantMix  - curMix_)  * attack_;
+
+            double y = x;
+            if (curGain_ > 1e-4) {
+                double n = noise();
+                double lo = lowBand_[1].process(lowBand_[0].process(n));
+                double hi = highBand_[1].process(highBand_[0].process(n));
+                // Both bands are normalised to about unit RMS so `gain_` means
+                // the same thing whichever is selected.
+                double band = (1.0 - curMix_) * lo * 2.35 + curMix_ * hi * 2.60;
+                y += gain_ * curGain_ * ref * band;
+            } else {
+                // Keep the filters running so a phone never starts on a
+                // transient from stale state.
+                double n = noise();
+                lowBand_[1].process(lowBand_[0].process(n));
+                highBand_[1].process(highBand_[0].process(n));
+            }
+            samples[i] = clip(y * makeup_);
+            ++pos_;
         }
     }
 
 private:
-    // Deterministic white noise: the same text renders the same audio, which
-    // matters for anyone diffing output between builds.
-    double noise() {
-        rng_ = rng_ * 1664525u + 1013904223u;
-        return double(int32_t(rng_)) * (1.0 / 2147483648.0);
+    struct Sched { uint64_t at; Fric kind; };
+
+    // Mean-|x| the engine's speech rarely falls below while it is talking;
+    // used only until real speech sets the reference.  About 3.5% of full
+    // scale, against the 6-12% the eleven language packs measure.
+    static constexpr double kLevelFloor = 1150.0;
+
+    static int16_t clip(double y) {
+        return int16_t(y > 32767.0 ? 32767 : y < -32768.0 ? -32768 : y);
     }
 
-    Biquad srcHp_, outHp_[2], wideHp_, shelf_;
+    // Level relative to the running speech level, and where in the two bands
+    // the energy sits (0 = the low band alone, 1 = the high band alone).
+    // Levels are the ones a formant synthesizer uses for these phones: /s/ and
+    // /S/ carry frication as loud as a weak vowel, /f/ and /T/ much less, and
+    // the voiced members of each pair about half, because their voicing is
+    // already there in the engine's output.
+    static void shapeOf(Fric k, double* gain, double* mix) {
+        switch (k) {
+            case Fric::S:      *gain = 1.00; *mix = 0.95; break;
+            case Fric::Z:      *gain = 0.42; *mix = 0.95; break;
+            case Fric::Sh:     *gain = 0.95; *mix = 0.30; break;
+            case Fric::Zh:     *gain = 0.40; *mix = 0.30; break;
+            case Fric::F:      *gain = 0.42; *mix = 0.62; break;
+            case Fric::V:      *gain = 0.20; *mix = 0.62; break;
+            case Fric::Th:     *gain = 0.34; *mix = 0.70; break;
+            case Fric::Dh:     *gain = 0.17; *mix = 0.70; break;
+            case Fric::H:      *gain = 0.30; *mix = 0.20; break;
+            case Fric::X:      *gain = 0.50; *mix = 0.12; break;
+            case Fric::Burst:  *gain = 0.32; *mix = 0.55; break;
+            default:           *gain = 0.00; *mix = 0.00; break;
+        }
+    }
+
+    // Longest a phone of this class may keep making noise without a further
+    // callback, in frames.  A stop burst is milliseconds; a fricative can be
+    // drawn out, but not indefinitely.
+    uint64_t maxRun(Fric k) const {
+        double secs = (k == Fric::Burst) ? 0.030
+                    : (k == Fric::Voiced) ? 0.0
+                    : 0.320;
+        return uint64_t(secs * fs_);
+    }
+
+    // Deterministic white noise: the same text renders the same audio, which
+    // matters for anyone diffing output between builds.  The top bits are used
+    // because the low bits of a power-of-two linear congruential generator are
+    // not random at all -- bit 0 of this one simply alternates, at Nyquist.
+    double noise() {
+        rng_ = rng_ * 1664525u + 1013904223u;
+        return double(int32_t(rng_ & 0xFFFFFF00u)) * (1.0 / 2147483648.0);
+    }
+
+    Biquad lowBand_[2], highBand_[2], shelf_;
     DcBlocker dc_;
     uint32_t rng_ = 22050;
-    double gain_ = 0.0, smooth_ = 0.0, makeup_ = 1.0;
-    double env_ = 0.0, envHp_ = 0.0, gate_ = 0.0;
+    double fs_ = 22050.0;
+    double gain_ = 0.0, makeup_ = 1.0;
+    double speechUp_ = 0.0, speechDown_ = 0.0, attack_ = 0.0, release_ = 0.0;
+    double speech_ = 0.0, peak_ = 0.0, curGain_ = 0.0, curMix_ = 0.0;
     int amount_ = 0;
+
+    std::vector<Sched> sched_;
+    size_t   next_ = 0;
+    uint64_t pos_ = 0;
+    uint64_t phoneEnd_ = 0;
+    Fric     target_ = Fric::Voiced;
 };
 
 }  // namespace ppc

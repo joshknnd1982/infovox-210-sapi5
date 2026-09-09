@@ -1,4 +1,4 @@
-Infovox 210 SAPI5 1.3.0
+Infovox 210 SAPI5 1.4.0
 =======================
 
 What this is
@@ -42,17 +42,19 @@ an expiry to remove.
 
 Consonant clarity
 -----------------
-The 1996 engine runs its formant synthesizer at about 8 kHz internally, so
-everything it produces is band-limited at roughly 4 kHz.  Sibilants live at
-4 to 8 kHz, which is why s, f, h and th sound faint and are easy to confuse
-with one another.  Nothing in the engine changes this: it has no quality or
-sample-rate setting, and it behaves identically however the machine it thinks
-it is running on is described to it.
+The 1996 engine's noise source produces nothing, so it has no fricatives at
+all.  Measured on its own output, the start of "see", "fee", "thief" and "he"
+is the same voiced pulse train as the start of "heed": wherever an s, f, th or
+h belongs, the engine emits voicing instead.  Its aspiration control confirms
+it -- raising it scales the voice down and adds no noise, and at full scale the
+output is silence.  A formant synthesizer with no noise source has no s.
 
-So the missing band is put back afterwards.  A shelf lifts the top of what the
-engine does produce, and the octave above its ceiling is regenerated as shaped
-noise that follows the level of the band below it.  The Consonant clarity
-setting controls how much of this is applied:
+So the frication is synthesised here, and it is placed from the engine's own
+phoneme stream rather than guessed from the audio: the engine reports every
+phone it speaks, and each language pack carries its own symbol table, so each
+consonant gets noise of the right kind, in the right place, at a level that
+follows the voice.  A shelf also lifts what the engine does produce above
+2.6 kHz.  The Consonant clarity setting controls how much of this is applied:
 
     0    the untouched 1996 output
     40   the default a fresh install uses
@@ -84,7 +86,7 @@ and 100 is the engine's maximum:
     Pitch modulation    0..100  ->  how much the intonation moves
     Breathiness         0..100  ->  the engine's private aspiration control
     Volume              0..100  ->  applied in software
-    Consonant clarity   0..100  ->  restores the band above 4 kHz (see above)
+    Consonant clarity   0..100  ->  how much frication to synthesise (see above)
 
 Your screen reader's own 0 to 100 sliders map onto SAPI's -10..+10, which
 this engine spreads across that whole range: at 0 you get the engine's

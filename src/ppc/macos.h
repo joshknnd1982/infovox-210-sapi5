@@ -37,6 +37,9 @@ constexpr int16_t kNoErr = 0;
 constexpr int16_t kMemFullErr = -108;
 constexpr int16_t kResNotFound = -192;
 
+// A SndDoubleBuffer is four longs of header followed by the sound data.
+constexpr uint32_t kDbHeaderSize = 16;
+
 // Double-buffer state captured from SndPlayDoubleBuffer.
 struct DoubleBuffer {
     bool     active = false;
@@ -96,9 +99,18 @@ public:
     // time; the render loop runs them between buffers.
     void runPendingTasks();
 
-    // Client Speech Manager callbacks arrive as sentinel "UPP" values.
-    struct Callback { uint32_t upp; uint32_t args[4]; };
+    // Client Speech Manager callbacks arrive as sentinel "UPP" values.  The
+    // engine fires them while it is filling a double buffer, so `writeFrames`
+    // records how far into that buffer it had written -- which is where in the
+    // audio the event actually belongs.  Without it every phoneme in a buffer
+    // would share one timestamp, and 1024 frames is 46 ms: longer than the
+    // consonants that need placing.
+    struct Callback { uint32_t upp; uint32_t args[4]; uint32_t writeFrames; };
     std::vector<Callback>& callbacks() { return callbacks_; }
+
+    // Called around callUpp(doubleBackProc): tracks how much of the buffer the
+    // engine has filled so callbacks can be timestamped against it.
+    void beginBufferFill(uint32_t buffer);
 
     // SpeechLib::GetVoiceInfo(VoiceSpec*, OSType selector, void* info).  The
     // component calls back into the Speech Manager to locate a voice file; the
@@ -173,8 +185,17 @@ private:
     std::vector<uint32_t> timerTasks_;
     std::vector<Callback> callbacks_;
 
+    static void hookBufWriteTramp(uc_engine*, uc_mem_type, uint64_t addr, int size,
+                                  int64_t value, void* user);
+    void hookBufWrite(uint64_t addr, int size);
+
     VoiceInfoFn voiceInfo_;
     DoubleBuffer dbl_;
+    uint32_t dbFillBase_ = 0;      // guest address of the buffer being filled
+    uint32_t dbFillLimit_ = 0;     // one past its sound data
+    uint32_t dbWriteFrames_ = 0;   // frames written into it so far
+    uint32_t dbBytesPerFrame_ = 2;
+    bool     dbHookInstalled_ = false;
     uint32_t storage_ = 0;
     uint64_t micros_ = 0;
 

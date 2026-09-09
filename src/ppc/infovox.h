@@ -103,6 +103,7 @@ private:
     std::vector<int> voicePackIndex_;         // parallel to voices_
 
     std::string currentVoice_;
+    std::string currentPack_;   // language pack of the current voice
     InfovoxParams params_;
     uint32_t sampleRate_ = 22050;
     uint32_t textBuf_ = 0, scratch_ = 0;

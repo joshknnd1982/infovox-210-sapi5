@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <map>
 
 #include <windows.h>
 
@@ -38,6 +39,40 @@ constexpr uint32_t kCbPhoneme    = 0xDEAD0005;
 constexpr uint32_t kCbError      = 0xDEAD0006;
 
 constexpr uint32_t dbBufferReady = 1, dbLastBuffer = 4;
+
+// Which phonemes need frication synthesised for them, by the symbol the
+// language pack itself gives them (the 'ttss' table).  Infovox used one
+// notation across all eleven languages -- S, SH, F, TH, H and so on, with
+// lowercase digraphs in the two English packs -- so almost all of this is
+// language-independent.  `pack` settles the one symbol that is not: CH is the
+// German ach-Laut but the Spanish /tS/.
+//
+// Anything unlisted is Voiced, which synthesises nothing, so a language whose
+// symbol is not recognised is left exactly as the engine rendered it.
+Fric fricationFor(const std::string& sym, const std::string& pack) {
+    struct Entry { const char* sym; Fric kind; };
+    static const Entry kMap[] = {
+        // English packs use lowercase digraphs and uppercase singles.
+        {"S", Fric::S},      {"S1", Fric::S},     {"ts", Fric::S},
+        {"Z", Fric::Z},
+        {"sh", Fric::Sh},    {"SH", Fric::Sh},    {"2S", Fric::Sh},
+        {"SJ", Fric::Sh},    {"TJ", Fric::Sh},    {"ch", Fric::Sh},
+        {"zh", Fric::Zh},    {"ZH", Fric::Zh},    {"jh", Fric::Zh},
+        {"F", Fric::F},
+        {"V", Fric::V},
+        {"th", Fric::Th},    {"TH", Fric::Th},
+        {"dh", Fric::Dh},    {"DH", Fric::Dh},
+        {"hh", Fric::H},     {"H", Fric::H},
+        {"X", Fric::X},      {"KJ", Fric::X},     {"GH", Fric::X},
+        {"P", Fric::Burst},  {"T", Fric::Burst},  {"K", Fric::Burst},
+        {"2T", Fric::Burst}, {"KH", Fric::Burst},
+    };
+    if (sym.empty()) return Fric::Voiced;
+    if (sym == "CH") return pack == "spanish" ? Fric::Sh : Fric::X;
+    for (const auto& e : kMap)
+        if (sym == e.sym) return e.kind;
+    return Fric::Voiced;
+}
 
 inline int32_t toFixed(double v) { return int32_t(v * 65536.0 + (v < 0 ? -0.5 : 0.5)); }
 
@@ -234,6 +269,7 @@ bool InfovoxEngine::setVoice(const std::string& id, std::string* err) {
         return false;
     }
     currentVoice_ = id;
+    currentPack_ = v->pack;
     loadPhonemeTable();
     return applyParams(err);
 }
@@ -339,6 +375,25 @@ bool InfovoxEngine::render(const std::string& text, const PcmSink& sink,
     uint64_t produced = 0;
     int which = 0;
 
+    // Callbacks fire while the engine is filling a buffer, and that buffer is
+    // not emitted until two turns later, so they are held against the buffer
+    // they came from and resolved to a frame offset when it goes out.  The
+    // callbacks left over from Speak belong to whatever it pre-filled, which is
+    // the start of the utterance.
+    struct Pending { uint32_t writeFrames; bool word; int32_t a, b; };
+    std::map<uint32_t, std::vector<Pending>> pending;
+    auto collect = [&](uint32_t buffer) {
+        auto& v = pending[buffer];
+        for (const auto& cb : mac_->callbacks()) {
+            if (cb.upp == kCbWord)
+                v.push_back({cb.writeFrames, true, int32_t(cb.args[2]), int32_t(cb.args[3])});
+            else if (cb.upp == kCbPhoneme)
+                v.push_back({cb.writeFrames, false, int32_t(cb.args[2]), 0});
+        }
+        mac_->callbacks().clear();
+    };
+    collect(d.buffers[0]);
+
     // A screen reader abandons an utterance on every keypress.  Stopping dead
     // leaves the waveform hanging wherever it happened to be -- measured at a
     // buffer edge that is a mean of 1400 counts and can reach 11000 -- and the
@@ -354,18 +409,44 @@ bool InfovoxEngine::render(const std::string& text, const PcmSink& sink,
         uint32_t flags = mac_->rd32(b + 4);
 
         if (frames) {
-            raw.resize(size_t(frames) * bytesPerFrame);
-            mac_->read(b + 16, raw.data(), raw.size());
-            pcm.resize(frames);
-            for (uint32_t i = 0; i < frames; ++i) {
-                int16_t s = int16_t((uint32_t(raw[i * 2]) << 8) | raw[i * 2 + 1]);
-                if (gain != 1.0) {
-                    int v = int(s * gain);
-                    s = int16_t(v > 32767 ? 32767 : v < -32768 ? -32768 : v);
+            // Resolve this buffer's callbacks against where in it they fired,
+            // then hand the phonemes to the clarity stage before it sees the
+            // audio they belong to.
+            auto it = pending.find(b);
+            if (it != pending.end()) {
+                for (const auto& p : it->second) {
+                    uint32_t off = p.writeFrames > frames ? frames : p.writeFrames;
+                    uint64_t at = produced + off;
+                    if (p.word) {
+                        events_.push_back({InfovoxEvent::kWord, uint32_t(at), p.a, p.b});
+                    } else {
+                        events_.push_back({InfovoxEvent::kPhoneme, uint32_t(at), p.a, 0});
+                        const std::string& sym =
+                            (p.a >= 0 && size_t(p.a) < phonemes_.size()) ? phonemes_[p.a]
+                                                                         : std::string();
+                        clarity_.addPhoneme(at, fricationFor(sym, currentPack_));
+                    }
                 }
-                pcm[i] = s;
+                it->second.clear();
             }
+
+            raw.resize(size_t(frames) * bytesPerFrame);
+            mac_->read(b + kDbHeaderSize, raw.data(), raw.size());
+            pcm.resize(frames);
+            for (uint32_t i = 0; i < frames; ++i)
+                pcm[i] = int16_t((uint32_t(raw[i * 2]) << 8) | raw[i * 2 + 1]);
+
+            // Clarity runs before the volume trim so it always sees the level
+            // the engine actually produces; otherwise its level reference, and
+            // with it the loudness of the frication, would move with a slider
+            // that is meant only to make the whole thing quieter.
             clarity_.process(pcm.data(), pcm.size());
+            if (gain != 1.0) {
+                for (uint32_t i = 0; i < frames; ++i) {
+                    int v = int(pcm[i] * gain);
+                    pcm[i] = int16_t(v > 32767 ? 32767 : v < -32768 ? -32768 : v);
+                }
+            }
 
             if (stopping) {
                 // Ramp what continues on from the last buffer down to zero.
@@ -391,18 +472,11 @@ bool InfovoxEngine::render(const std::string& text, const PcmSink& sink,
         mac_->wr32(b + 4, flags & ~dbBufferReady);
         mac_->wr32(b, 0);
         mac_->runPendingTasks();
+        mac_->beginBufferFill(b);
         mac_->callUpp(d.doubleBackProc, {d.channel, b});
         if (mac_->faulted()) { if (err) *err = mac_->lastError(); return false; }
 
-        for (const auto& cb : mac_->callbacks()) {
-            if (cb.upp == kCbWord)
-                events_.push_back({InfovoxEvent::kWord, uint32_t(produced),
-                                   int32_t(cb.args[2]), int32_t(cb.args[3])});
-            else if (cb.upp == kCbPhoneme)
-                events_.push_back({InfovoxEvent::kPhoneme, uint32_t(produced),
-                                   int32_t(cb.args[2]), 0});
-        }
-        mac_->callbacks().clear();
+        collect(b);
         which ^= 1;
     }
     return true;

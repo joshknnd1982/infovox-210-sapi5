@@ -139,20 +139,133 @@ consecutive utterances on all 55 voices.
 
 ---
 
+## The consonant bug, and how it was found
+
+Version 1.3.0 shipped with a bug. A tester reported that it was "definitely
+buggy and not exactly how it sounded on Mac OS", that *s*, *sh* and *h* did not
+sound right, and guessed the fault was in the noise generator code. That was the
+right guess about the wrong noise generator, and following it turned up
+something larger underneath.
+
+**The gate was firing on the wrong sounds.** Consonant clarity worked by
+detecting how noise-like each instant was — the ratio of energy above 2.3 kHz to
+the total — and adding shaped noise when that ratio was high. Measuring it phone
+by phone over a 39-phone inventory on the American male voice showed that it did
+not do what it was meant to. The gate opened further on the diphthongs and the
+nasals than on the sibilants it was written for:
+
+| | opens to | | opens to |
+|---|---|---|---|
+| /s/ *see* | 0.19 | /aɪ/ *hide* | **0.48** |
+| /ʃ/ *she* | 0.34 | /eɪ/ *hayed* | **0.42** |
+| /f/ *fee* | 0.22 | /æ/ *had* | **0.32** |
+| /θ/ *thief* | 0.19 | /m/ *me* | **0.93** peak |
+| /z/ /v/ /ʒ/ /ð/ | **0.00** | /n/ *knee* | **0.72** peak |
+
+So the feature was spraying its noise onto vowels and nasals, giving the voiced
+fricatives nothing at all, and never delivering more than about half its nominal
+amount to anything. That alone accounts for the report.
+
+**No gate of that kind can work on this engine.** Four detectors were then
+measured over the same inventory — high-band ratio, high band against 0–700 Hz,
+high band against 300–1200 Hz, and aperiodicity. The separation score, the
+quietest fricative divided by the loudest non-fricative, was 0.66×, 0.60×, 0.66×
+and 0.72×. All below 1.0: the two groups overlap completely, so no threshold on
+any of them separates a fricative from a vowel.
+
+**Which raised the real question: why not?** Rendering *see*, *fee*, *thief*,
+*he* and *heed* and comparing their first 50 ms gave the answer. All five have
+the same spectrum to within 2 dB and the same glottal pulse train at 125 Hz.
+*hiss* spoken at 50 words per minute is 399 ms of continuously voiced signal
+with no fricative segment in it anywhere. The engine was not producing weak
+fricatives; it was producing none, and substituting voicing for them.
+
+The engine's own aspiration control settles it. Aspiration is noise, so turning
+it up should add noise and reduce periodicity:
+
+| breathiness | RMS | periodicity |
+|---|---|---|
+| 0 | 3306 | 0.901 |
+| 50 | 1040 | 0.902 |
+| 100 | **0 — digital silence** | — |
+
+The voicing is scaled down and nothing replaces it. At full aspiration, where
+the output should be all noise, there is silence. That is what a formant
+synthesizer sounds like when its noise generator returns zero.
+
+**Confirmed inside the emulator.** Hooking every guest memory write during an
+utterance shows the synthesizer's per-sample state: 23 doubles updated exactly
+once per output frame, in pairs, as a bank of resonators. Six of them — one
+whole branch — hold exactly 0.0 from the first sample to the last, through a
+sentence full of /s/. That is the noise branch, receiving nothing. Injecting
+entropy into those words does not revive it: they are dead stores, and the live
+state is kept in registers inside the synthesis loop, so reviving the engine's
+own generator means reverse-engineering that loop. That is still the fix worth
+having, and it is not done here.
+
+**What was done instead.** The engine cannot say where its fricatives are
+through the audio, but it says so directly: it fires a phoneme callback for
+every phone it speaks, and every language pack carries its own symbol table. So
+the noise is now scheduled from that stream:
+
+* callbacks used to be timestamped with the frame count at the moment they were
+  collected, which put every phone in a buffer at one time and could be two
+  buffers — about 93 ms — from the audio it described. The runtime now tracks
+  how far into the buffer the engine has written when a callback fires, so
+  phonemes and word boundaries land on the right sample;
+* each phoneme symbol selects a noise class, from the pack's own table, so this
+  works the same way in all eleven languages;
+* the noise is a crossfade between two fixed bands rather than a retuned filter,
+  because retuning inside an utterance clicks;
+* levels follow a slow envelope of the engine's own speech, with a floor so that
+  a fricative that opens an utterance still gets one, and a duck so that
+  trailing silence stays silent.
+
+Measured over all 55 voices with `tools/verify_clarity.py`, which renders each
+voice twice — clarity off and on — and attributes the difference phone by phone:
+frication now lands 6–13 dB below the utterance's speech level, vowels and
+nasals receive 42 dB below it or less, trailing silence receives nothing at all,
+and nothing clips.
+
+---
+
 ## Two things the engine cannot do, and what is done about them
 
-**It stops at 4 kHz.** The synthesizer runs at roughly 8 kHz internally and
-resamples to the 22050 Hz it declares, so its output is hard band-limited at
-about 4.1 kHz — measured at −100 dB by 4.5 kHz. Sibilants live at 4–8 kHz, so
-*s*, *f*, *h* and *th* arrive faint and are easy to confuse. Nothing in the
-engine changes this: every `Gestalt` answer, every Sound Manager version and
-every speech parameter produce byte-identical output.
+**Its noise source produces nothing, so it has no fricatives.** This is worse
+than a bandwidth limit, and it took measuring to see. Rendered on the American
+male voice, the first 50 ms of *see*, *fee*, *thief*, *he* and *heed* have the
+same spectrum to within 2 dB and the same glottal pulse train at F0: wherever a
+voiceless fricative belongs, the engine emits voicing instead. Its own
+aspiration control says the same thing — turning it up scales the voice down and
+adds no noise at all, and at full scale the output is digital silence, which is
+what a synthesizer sounds like when its noise generator returns zero. Inside the
+emulated synthesizer, six of the twenty-three per-sample filter states — one
+whole resonator branch, the noise branch — hold exactly 0.0 for an entire
+utterance. A formant synthesizer with no noise source has no *s*, no *sh*, no
+*f*, no *h*.
 
-So the missing octave is restored afterwards. A shelf lifts the top of what the
-engine does produce, and the band above its ceiling is regenerated as shaped
-noise that tracks the level of the band below. The **Consonant clarity** setting
-controls how much; `0` gives the untouched 1996 output, and a fresh install uses
-`40`.
+That also means the audio carries no clue as to where the fricatives are. Four
+detectors were measured over a 39-phone inventory — high-band ratio, high band
+against 0–700 Hz, high band against 300–1200 Hz, and aperiodicity — and none
+separated *s*, *sh*, *f*, *th* and *h* from the vowels; the best margin was
+0.72×, worse than chance.
+
+But the engine *says* what it is speaking. It fires a phoneme callback for every
+phone, and each language pack carries its own symbol table. So the frication is
+scheduled from that stream rather than guessed from the audio: the callback is
+timestamped against how far into the buffer the engine had written when it
+fired, which places it to the sample, and each phoneme symbol selects a noise
+class — *s* sharp and high, *sh* lower and broader, *f* and *th* weak and flat,
+*h* breathy, the voiced members of each pair at about half level because their
+voicing is already there. Levels follow the engine's own speech, so frication
+tracks the voice and the speaking rate. A high shelf still lifts what the engine
+does produce above 2.6 kHz.
+
+The **Consonant clarity** setting controls how much; `0` gives the untouched
+1996 output, and a fresh install uses `40`. `tools/verify_clarity.py` checks the
+result on every installed voice by rendering each one twice, with clarity off
+and on, and attributing the difference phone by phone against the engine's own
+phoneme stream.
 
 **Its output sits on a DC offset**, walking up to about 1200 counts as an
 utterance starts. Harmless while it plays — but a screen reader abandons an
@@ -168,15 +281,16 @@ with a 5 ms ramp instead of stopping dead.
 These are worth knowing before you install. None of them is a bug in the port;
 they are what this particular engine is.
 
-**Consonants are still weak, and cannot really be fixed.** The 4 kHz ceiling
-above is a hard limit of the synthesizer. The Consonant clarity setting makes
-*s*, *f*, *h* and *th* far more present, but it is reconstructing a band the
-engine never generated — it is putting plausible noise where the real cue
-should be, not recovering it. Fine distinctions still get lost: *s* against
-*f* against *th* can be hard to tell apart, particularly at speed, and no
-setting here will make them as crisp as a modern synthesizer. This is the main
-reason a 1996 formant synthesizer sounds the way it does, and running it under
-emulation neither causes nor cures it.
+**The fricatives are synthesised, not recovered.** The engine's noise source is
+dead, so there is no original frication to restore; what you hear is generated
+here, from the engine's phoneme stream, and it is only as good as the class each
+phoneme is put into. The classes are broad — one *s*, one *sh*, one *f*/*th* —
+so *f* against *th* is still a fine distinction, and a phoneme symbol the
+classifier does not recognise is left exactly as the engine rendered it, which
+means silent where a fricative should be. Reviving the engine's own noise
+generator, rather than working around it, would be the real fix; it is somewhere
+in the PowerPC synthesis loop, and its live state is held in registers rather
+than memory, so finding it means reverse-engineering that loop.
 
 **It is an early version, and it mispronounces more than later ones.** The 210's
 letter-to-sound rules and pronunciation dictionaries are from 1996 and were
@@ -206,7 +320,7 @@ its maximum**, so a screen reader's own sliders reach both extremes.
 | Pitch modulation | how far the intonation moves |
 | Breathiness | the engine's private `InVx`/`aspi` aspiration control |
 | Volume | applied in software — the engine accepts `soVolume` but never applies it |
-| Consonant clarity | restores the band above 4 kHz |
+| Consonant clarity | how much frication to synthesise for the fricatives |
 
 SAPI has no slider for pitch modulation, breathiness or consonant clarity, so
 those are set per voice in **Infovox 210 Settings**. There is also an **Infovox
@@ -248,7 +362,7 @@ That builds x64 and x86, stages `output\`, and compiles the installer.
 |---|---|
 | `bin/` | the original 1996 resource fork, exactly as extracted, plus the KTH research papers as PDFs |
 | `engine/` | the shipped engine packs (`.ivp`), built from `bin/` with the demo patches applied |
-| `src/ppc/` | PEF loader, the classic Mac OS runtime, the engine driver, the audio conditioning |
+| `src/ppc/` | PEF loader, the classic Mac OS runtime, the engine driver, the frication synthesis |
 | `src/host/` | the 64-bit worker |
 | `src/sapi/` | the SAPI5 engine, for both architectures |
 | `tools/` | settings dialog, diagnostics, the command-line probe, sample and verification scripts |

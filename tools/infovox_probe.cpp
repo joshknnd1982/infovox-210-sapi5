@@ -81,6 +81,15 @@ int main(int argc, char** argv) {
         return 0;
     }
 
+    if (argc >= 3 && strcmp(argv[1], "phonemes") == 0) {
+        if (!eng.setVoice(argv[2], &err)) { fprintf(stderr, "%s\n", err.c_str()); return 1; }
+        const auto& sym = eng.phonemeSymbols();
+        printf("%s: %zu phoneme opcodes\n", argv[2], sym.size());
+        for (size_t i = 0; i < sym.size(); ++i)
+            if (!sym[i].empty()) printf("%3zu %s\n", i, sym[i].c_str());
+        return 0;
+    }
+
     // speak <voice> <out.wav> [rate pitch pitchmod breath volume] <text...>
     if (argc >= 4 && strcmp(argv[1], "speak") == 0) {
         std::string voice = argv[2], out = argv[3];
@@ -120,6 +129,19 @@ int main(int argc, char** argv) {
         printf("%s: %.2fs audio in %.3fs (%.1fx realtime), %zu events -> %s\n",
                voice.c_str(), secs, took, took > 0 ? secs / took : 0,
                eng.events().size(), out.c_str());
+        if (getenv("INFOVOX_EVENTS")) {
+            const auto& sym = eng.phonemeSymbols();
+            for (const auto& e : eng.events()) {
+                double t = double(e.sampleOffset) / double(eng.sampleRate());
+                if (e.kind == ppc::InfovoxEvent::kPhoneme) {
+                    const char* s = (e.a >= 0 && size_t(e.a) < sym.size())
+                                        ? sym[e.a].c_str() : "?";
+                    printf("  %7.3f  phoneme %-4s (%d)\n", t, s, e.a);
+                } else {
+                    printf("  %7.3f  word at byte %d, %d bytes\n", t, e.a, e.b);
+                }
+            }
+        }
         return 0;
     }
 
