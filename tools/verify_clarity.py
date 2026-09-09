@@ -40,7 +40,13 @@ SENTENCES = {
 FRICATIVE = {"S", "S1", "ts", "Z", "sh", "SH", "2S", "SJ", "TJ", "ch",
              "zh", "ZH", "jh", "F", "V", "th", "TH", "dh", "DH",
              "hh", "H", "X", "KJ", "GH", "CH"}
-BURST = {"P", "T", "K", "2T", "KH"}
+# The stops are deliberately not fricatives: a synthesised release burst reads
+# as a stray /s/, so they must come out silent like the vowels.
+
+# A word-final fricative has no successor to end it, so it is capped.  At the
+# engine's default 150 wpm that cap is 140 ms; allow for the ramps and for two
+# fricatives running together.
+MAX_FINAL_FRICATION_MS = 210.0
 
 # A fricative must be at least this loud against the utterance's own speech
 # level, and anything that is not a consonant must be quieter than this.
@@ -95,8 +101,8 @@ def main():
 
     tmp = tempfile.mkdtemp(prefix="clarity_")
     print("Added frication, in dB against each utterance's own speech level.")
-    print("%-6s %-10s %9s %9s %9s %9s %7s  %s" %
-          ("voice", "pack", "fricative", "vowel", "silence", "peak", "x-rt", ""))
+    print("%-6s %-10s %9s %9s %9s %7s %9s %7s  %s" %
+          ("voice", "pack", "fricative", "vowel", "silence", "held", "peak", "x-rt", ""))
     failures = []
     for vid, pack in voices:
         dry = os.path.join(tmp, vid + "_0.wav")
@@ -123,11 +129,27 @@ def main():
             ea = (a[s0:s1] ** 2).mean()
             eb = (b[s0:s1] ** 2).mean()
             added = math.sqrt(max(eb - ea, 0.0))
-            (fr if sym in FRICATIVE else vo if sym not in BURST else []).append(added)
+            (fr if sym in FRICATIVE else vo).append(added)
 
         # Everything after the last phoneme is trailing silence.
         tail = int(min(events[-1][0] + 0.35, n / fs) * fs) if events else n
         sil = math.sqrt((b[tail:] ** 2).mean()) if n - tail > 128 else 0.0
+
+        # How long the last phone's frication runs.  Nothing ends it but the
+        # cap, so this is where an over-long word-final /s/ shows up.
+        held = 0.0
+        if events:
+            t0 = int(events[-1][0] * fs)
+            step = int(0.010 * fs)
+            gate = speech * 0.02
+            k = t0
+            while k + step <= n:
+                ea = (a[k:k + step] ** 2).mean()
+                eb = (b[k:k + step] ** 2).mean()
+                if math.sqrt(max(eb - ea, 0.0)) < gate:
+                    break
+                held += 10.0
+                k += step
 
         if not fr or not vo:
             failures.append("%s: no phonemes classified" % vid)
@@ -147,8 +169,10 @@ def main():
             bad.append("noise in silence")
         if peak >= 32767:
             bad.append("clipping")
-        print("%-6s %-10s %8.1f %9.1f %9.1f %9.0f %6.1fx  %s" %
-              (vid, pack, dfr, dvo, dsil, peak, speed,
+        if held > MAX_FINAL_FRICATION_MS:
+            bad.append("final fricative held %.0f ms" % held)
+        print("%-6s %-10s %8.1f %9.1f %9.1f %6.0fms %9.0f %6.1fx  %s" %
+              (vid, pack, dfr, dvo, dsil, held, peak, speed,
                "FAIL: " + ", ".join(bad) if bad else "ok"))
         if bad:
             failures.append("%s (%s): %s" % (vid, pack, ", ".join(bad)))
@@ -159,9 +183,10 @@ def main():
         for f in failures:
             print("  " + f)
         sys.exit(1)
-    print("all %d voices pass: frication on the fricatives (>= %.0f dB), vowels and "
-          "silence clean (<= %.0f dB), no clipping"
-          % (len(voices), FRICATION_MIN_DB, SILENT_MAX_DB))
+    print("all %d voices pass: frication on the fricatives (>= %.0f dB); vowels, "
+          "stops and silence clean (<= %.0f dB);\nno final fricative held past %.0f ms; "
+          "no clipping"
+          % (len(voices), FRICATION_MIN_DB, SILENT_MAX_DB, MAX_FINAL_FRICATION_MS))
 
 
 if __name__ == "__main__":

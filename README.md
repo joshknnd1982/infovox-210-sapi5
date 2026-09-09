@@ -255,17 +255,53 @@ phone, and each language pack carries its own symbol table. So the frication is
 scheduled from that stream rather than guessed from the audio: the callback is
 timestamped against how far into the buffer the engine had written when it
 fired, which places it to the sample, and each phoneme symbol selects a noise
-class — *s* sharp and high, *sh* lower and broader, *f* and *th* weak and flat,
-*h* breathy, the voiced members of each pair at about half level because their
-voicing is already there. Levels follow the engine's own speech, so frication
-tracks the voice and the speaking rate. A high shelf still lifts what the engine
-does produce above 2.6 kHz.
+class — *s* sharp and high, *sh* lower and broader, *ch* and *j* sharper still
+because an affricate is, *f* and *th* weak and flat, *h* breathy, and the voiced
+members of each pair quieter because their voicing is already there. Levels
+follow the engine's own speech, so frication tracks the voice and the speaking
+rate. A high shelf still lifts what the engine does produce above 2.6 kHz.
+
+The stops get nothing. A synthesised release burst is a bare click of noise with
+no formant transition behind it, and after a */p/* it is heard as a stray *s* —
+plainly, in the word *reproduce*.
 
 The **Consonant clarity** setting controls how much; `0` gives the untouched
 1996 output, and a fresh install uses `40`. `tools/verify_clarity.py` checks the
 result on every installed voice by rendering each one twice, with clarity off
 and on, and attributing the difference phone by phone against the engine's own
 phoneme stream.
+
+### What 1.5.0 fixed
+
+The first version of this was measured for whether the noise landed on the right
+phones, and it did. It was not measured for how loud or how long, and four
+things were wrong:
+
+* **A word-final fricative ran on.** The last phoneme of an utterance has no
+  successor to end it, so it stopped only when a fixed 320 ms cap expired —
+  *pass* held its *s* for a third of a second. The cap now comes from the
+  speaking rate: 140 ms at the engine's default 150 wpm, scaled from there, so
+  it stays right when a screen reader is set to 400 wpm or to 60.
+* **A word-initial fricative before a stop was inaudible.** A voiceless
+  fricative is often digital silence in this engine, so an utterance opening
+  with one — *spot*, *see*, *Sofie* — offered nothing to scale the noise to and
+  fell back on a floor. Measured against 485 fricative onsets across all 55
+  voices, that floor sat **11.7 dB** below the same consonant mid-utterance,
+  which is why the *s* of *spot* sounded dropped. The floor is now set from that
+  measurement.
+* **The two noise bands were mixed wrongly.** The low band's normalising gain
+  was 2.35 where 3.218 was needed, leaving it 2.7 dB down; and because one noise
+  source through a 1.9–5.2 kHz and a 4.2–9.5 kHz filter comes out
+  anti-correlated (ρ = −0.248), a plain crossfade lost a further 4.2 dB in the
+  middle of its travel. Between them these were quietest for exactly the sounds
+  that needed them most — *ch*, *sh*, *f*, *v*. The crossfade is now equal-power
+  and the gains are the measured ones.
+* **The voiced fricatives were too quiet to identify a letter by.** Arrowing
+  over *v*, *z*, *g* and *j*, the engine's own pronunciations are right — *vee*,
+  *zee* (*zed* in British), *jee*, *jay* — but with */v/* at a tenth of the
+  level of */s/* the consonant simply was not there, and the letter was heard as
+  a vowel. *ch* got its own class at the same time, so *aych* and *chat* have an
+  affricate rather than a soft *sh*.
 
 **Its output sits on a DC offset**, walking up to about 1200 counts as an
 utterance starts. Harmless while it plays — but a screen reader abandons an

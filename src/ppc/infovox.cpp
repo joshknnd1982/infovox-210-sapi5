@@ -48,27 +48,31 @@ constexpr uint32_t dbBufferReady = 1, dbLastBuffer = 4;
 // German ach-Laut but the Spanish /tS/.
 //
 // Anything unlisted is Voiced, which synthesises nothing, so a language whose
-// symbol is not recognised is left exactly as the engine rendered it.
+// symbol is not recognised is left exactly as the engine rendered it.  The
+// stops are deliberately unlisted: a synthesised release burst is a plain
+// click of noise with no formant transition behind it, and after a /p/ it is
+// heard as a faint stray /s/ -- audible in "reproduce".
 Fric fricationFor(const std::string& sym, const std::string& pack) {
     struct Entry { const char* sym; Fric kind; };
     static const Entry kMap[] = {
         // English packs use lowercase digraphs and uppercase singles.
         {"S", Fric::S},      {"S1", Fric::S},     {"ts", Fric::S},
         {"Z", Fric::Z},
-        {"sh", Fric::Sh},    {"SH", Fric::Sh},    {"2S", Fric::Sh},
-        {"SJ", Fric::Sh},    {"TJ", Fric::Sh},    {"ch", Fric::Sh},
-        {"zh", Fric::Zh},    {"ZH", Fric::Zh},    {"jh", Fric::Zh},
+        {"SH", Fric::Sh},    {"2S", Fric::Sh},
+        {"SJ", Fric::Sh},    {"TJ", Fric::Sh},
+        {"ch", Fric::Ch},    {"CH", Fric::Ch},    {"sh", Fric::Sh},
+        {"zh", Fric::Zh},    {"ZH", Fric::Zh},    {"jh", Fric::Jh},
         {"F", Fric::F},
         {"V", Fric::V},
         {"th", Fric::Th},    {"TH", Fric::Th},
         {"dh", Fric::Dh},    {"DH", Fric::Dh},
         {"hh", Fric::H},     {"H", Fric::H},
         {"X", Fric::X},      {"KJ", Fric::X},     {"GH", Fric::X},
-        {"P", Fric::Burst},  {"T", Fric::Burst},  {"K", Fric::Burst},
-        {"2T", Fric::Burst}, {"KH", Fric::Burst},
     };
     if (sym.empty()) return Fric::Voiced;
-    if (sym == "CH") return pack == "spanish" ? Fric::Sh : Fric::X;
+    // CH is the only symbol two packs disagree about: the Spanish /tS/ against
+    // the German ach-Laut.
+    if (sym == "CH" && pack != "spanish") return Fric::X;
     for (const auto& e : kMap)
         if (sym == e.sym) return e.kind;
     return Fric::Voiced;
@@ -369,7 +373,8 @@ bool InfovoxEngine::render(const std::string& text, const PcmSink& sink,
     if (bytesPerFrame == 0) { if (err) *err = "bad audio format"; return false; }
 
     const double gain = double(params_.volume) / 100.0;
-    clarity_.configure(double(sampleRate_), params_.clarity);
+    clarity_.configure(double(sampleRate_), params_.clarity,
+                       scale(params_.rate, 0.0, 999.0));
     std::vector<uint8_t> raw;
     std::vector<int16_t> pcm;
     uint64_t produced = 0;

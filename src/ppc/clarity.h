@@ -126,22 +126,34 @@ enum class Fric : uint8_t {
     Voiced = 0,   // vowels, nasals, glides, voiced stops: nothing to add
     S,            // /s/          sharp, high
     Z,            // /z/          the same band, half level: it is partly voiced
-    Sh,           // /S/ /tS/     lower and broader than /s/
-    Zh,           // /Z/ /dZ/
+    Sh,           // /S/          lower and broader than /s/
+    Zh,           // /Z/
+    Ch,           // /tS/         an affricate: shorter, sharper, brighter than /S/
+    Jh,           // /dZ/
     F,            // /f/          weak, flat, spread wide
     V,            // /v/
     Th,           // /T/          weaker still
     Dh,           // /D/
     H,            // /h/          breathy, low, shaped like the vowel it leads
     X,            // German ach-Laut, Swedish sj, Spanish jota
-    Burst,        // /p/ /t/ /k/ release
 };
 
 class ConsonantClarity {
 public:
-    // amount: 0..100.  0 leaves the engine's output untouched.
-    void configure(double sampleRate, int amount) {
+    // amount: 0..100.  0 leaves the engine's output untouched.  `wordsPerMinute`
+    // is the rate the engine is speaking at, which sets how long a phone lasts.
+    void configure(double sampleRate, int amount, double wordsPerMinute) {
         fs_ = sampleRate;
+        // The last phoneme of an utterance has no successor to switch the
+        // schedule, so a word-final fricative would otherwise hiss until some
+        // arbitrary cap ran out -- "pass" held its /s/ for a third of a second.
+        // A fricative runs about 140 ms at the engine's default 150 wpm, and
+        // scales with the rate from there.
+        double wpm = wordsPerMinute < 40.0 ? 40.0
+                   : wordsPerMinute > 999.0 ? 999.0 : wordsPerMinute;
+        maxRun_ = 0.140 * (150.0 / wpm);
+        if (maxRun_ < 0.070) maxRun_ = 0.070;
+        if (maxRun_ > 0.400) maxRun_ = 0.400;
         amount_ = amount < 0 ? 0 : amount > 100 ? 100 : amount;
         double a = double(amount_) / 100.0;
         gain_ = 1.35 * a;
@@ -265,7 +277,18 @@ public:
                 double hi = highBand_[1].process(highBand_[0].process(n));
                 // Both bands are normalised to about unit RMS so `gain_` means
                 // the same thing whichever is selected.
-                double band = (1.0 - curMix_) * lo * 2.35 + curMix_ * hi * 2.60;
+                // Equal-power crossfade.  Measured over 200k samples, the two
+                // bands come out at 0.311 and 0.392 RMS from a 0.577 RMS
+                // source, so those are the gains that make each of them unit
+                // level; and because a shared source run through a 1.9-5.2 kHz
+                // and a 4.2-9.5 kHz filter is anti-correlated (rho = -0.248),
+                // a plain crossfade loses 4.2 dB in the middle of its travel.
+                // That was quietest for exactly the phones that needed it most
+                // -- /tS/, /S/, /f/ and /v/ all sit near the middle.
+                double w1 = 1.0 - curMix_, w2 = curMix_;
+                double p = w1 * w1 + w2 * w2 - 0.496 * w1 * w2;
+                double band = (w1 * lo * 3.218 + w2 * hi * 2.554) /
+                              std::sqrt(p > 1e-6 ? p : 1e-6);
                 y += gain_ * curGain_ * ref * band;
             } else {
                 // Keep the filters running so a phone never starts on a
@@ -282,10 +305,15 @@ public:
 private:
     struct Sched { uint64_t at; Fric kind; };
 
-    // Mean-|x| the engine's speech rarely falls below while it is talking;
-    // used only until real speech sets the reference.  About 3.5% of full
-    // scale, against the 6-12% the eleven language packs measure.
-    static constexpr double kLevelFloor = 1150.0;
+    // Level a fricative is given when the engine has produced nothing to
+    // scale it to.  A voiceless fricative is often digital silence here, so an
+    // utterance that opens with one -- "spot", "see", "Sofie" -- has no
+    // reference at all, and the old 1150 left those 11.7 dB below the same
+    // consonant mid-utterance, which is what made a word-initial /s/ before a
+    // stop sound dropped.  Measured over 485 fricative onsets on all 55 voices,
+    // the reference lands at a median of 4412 (p10 2301, p90 7314); 3000 sits
+    // just under that without shouting on the quietest voices.
+    static constexpr double kLevelFloor = 3000.0;
 
     static int16_t clip(double y) {
         return int16_t(y > 32767.0 ? 32767 : y < -32768.0 ? -32768 : y);
@@ -300,28 +328,33 @@ private:
     static void shapeOf(Fric k, double* gain, double* mix) {
         switch (k) {
             case Fric::S:      *gain = 1.00; *mix = 0.95; break;
-            case Fric::Z:      *gain = 0.42; *mix = 0.95; break;
+            case Fric::Z:      *gain = 0.58; *mix = 0.95; break;
             case Fric::Sh:     *gain = 0.95; *mix = 0.30; break;
-            case Fric::Zh:     *gain = 0.40; *mix = 0.30; break;
-            case Fric::F:      *gain = 0.42; *mix = 0.62; break;
-            case Fric::V:      *gain = 0.20; *mix = 0.62; break;
-            case Fric::Th:     *gain = 0.34; *mix = 0.70; break;
-            case Fric::Dh:     *gain = 0.17; *mix = 0.70; break;
-            case Fric::H:      *gain = 0.30; *mix = 0.20; break;
+            case Fric::Zh:     *gain = 0.48; *mix = 0.30; break;
+            case Fric::Ch:     *gain = 0.92; *mix = 0.52; break;
+            case Fric::Jh:     *gain = 0.62; *mix = 0.52; break;
+            case Fric::F:      *gain = 0.52; *mix = 0.62; break;
+            case Fric::V:      *gain = 0.44; *mix = 0.62; break;
+            case Fric::Th:     *gain = 0.42; *mix = 0.70; break;
+            case Fric::Dh:     *gain = 0.30; *mix = 0.70; break;
+            case Fric::H:      *gain = 0.38; *mix = 0.20; break;
             case Fric::X:      *gain = 0.50; *mix = 0.12; break;
-            case Fric::Burst:  *gain = 0.32; *mix = 0.55; break;
             default:           *gain = 0.00; *mix = 0.00; break;
         }
     }
 
-    // Longest a phone of this class may keep making noise without a further
-    // callback, in frames.  A stop burst is milliseconds; a fricative can be
-    // drawn out, but not indefinitely.
+    // Longest a phone may keep making noise, in frames.  The last phoneme of an
+    // utterance has no successor to switch the schedule, so without this a
+    // word-final /s/ hisses until the cap runs out -- which is what made
+    // "pass" hold its /s/ for a third of a second.
+    //
+    // The cap has to follow the speaking rate: at 50 words per minute a phone
+    // is three times as long as at 150, and a fixed figure would either cut
+    // slow speech off or let fast speech run on.  The engine's own phoneme
+    // timing gives it for nothing -- the median gap between callbacks is the
+    // length of a typical phone, and a fricative runs a little longer than one.
     uint64_t maxRun(Fric k) const {
-        double secs = (k == Fric::Burst) ? 0.030
-                    : (k == Fric::Voiced) ? 0.0
-                    : 0.320;
-        return uint64_t(secs * fs_);
+        return k == Fric::Voiced ? 0 : uint64_t(maxRun_ * fs_);
     }
 
     // Deterministic white noise: the same text renders the same audio, which
@@ -340,6 +373,7 @@ private:
     double gain_ = 0.0, makeup_ = 1.0;
     double speechUp_ = 0.0, speechDown_ = 0.0, attack_ = 0.0, release_ = 0.0;
     double speech_ = 0.0, peak_ = 0.0, curGain_ = 0.0, curMix_ = 0.0;
+    double maxRun_ = 0.140;
     int amount_ = 0;
 
     std::vector<Sched> sched_;
