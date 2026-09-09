@@ -1,0 +1,6 @@
+# major_version = 2.3 (major=0x02, minor=0x30)
+# development_stage = 0x80 (release)
+# prerelease_version_level = 0
+# region_code = 0x0003 (Germany)
+# version_number = 2.3
+# version_message = 2.3, © 1994 Infovox AB, Sweden.

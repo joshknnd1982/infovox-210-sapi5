@@ -1,0 +1,6 @@
+# This repository is mostly binary: a 1996 Macintosh resource fork, the engine
+# packs built from it, rendered audio, research PDFs and prebuilt binaries.
+# Line-ending conversion would corrupt every one of them, and on the source it
+# only makes diffs unreadable -- a 61-line change can be shown as a 1200-line
+# rewrite. So it is off for everything.
+* -text

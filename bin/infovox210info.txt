@@ -1,0 +1,13 @@
+Hey Josh,
+
+Since you were able to get Infovox to work with SAPI, I was wondering if
+you were up to the task of reversing this Mac version of Infovox 210.
+
+the entry point would be the PowerPC binary "._Infovox
+210_PPCm_128_i210_thng.main.rsc.bin". There's a 68k version included
+with this as well with "._Infovox 210_68km_128_Mac_OVE_comp.rsc.bin",
+but I think the PowerPC version is gonna be easier to disassemble.
+
+It's a demo, but I think a crack could be made for this, and run under
+SAPI. I think it sounds better than the Babel version. The Mac version
+is from 1996.

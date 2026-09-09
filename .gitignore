@@ -1,0 +1,5 @@
+# Build trees only.  The binaries in output/ are committed on purpose, so that
+# a clone is immediately usable without a compiler.
+build/
+build_x64/
+build_x86/

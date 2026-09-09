@@ -1,0 +1,6 @@
+# major_version = 2.1 (major=0x02, minor=0x10)
+# development_stage = 0x80 (release)
+# prerelease_version_level = 0
+# region_code = 0x0001 (France)
+# version_number = 2.1
+# version_message = 2.1, © 1996 Infovox AB, Sweden.

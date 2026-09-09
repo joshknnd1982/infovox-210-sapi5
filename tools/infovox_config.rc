@@ -1,0 +1,77 @@
+#include <windows.h>
+#include <commctrl.h>
+#include "infovox_config.h"
+
+// Every control has a static label immediately before it in the tab order, so a
+// screen reader announces the name with the value; the ampersands give each one
+// a keyboard shortcut that moves focus to the control the label describes.
+IDD_CONFIG DIALOGEX 0, 0, 340, 282
+STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Infovox 210 Settings"
+FONT 9, "Segoe UI", 400, 0, 0x1
+BEGIN
+    LTEXT           "&Voice:", IDC_VOICE_LABEL, 8, 10, 60, 9
+    COMBOBOX        IDC_VOICE, 72, 8, 260, 200,
+                    CBS_DROPDOWNLIST | WS_TABSTOP | WS_VSCROLL
+
+    GROUPBOX        "Custom voice", IDC_GROUP_CUSTOM, 8, 26, 324, 46
+    LTEXT           "&Language:", IDC_LANG_LABEL, 16, 42, 60, 9
+    COMBOBOX        IDC_LANG, 80, 40, 130, 200,
+                    CBS_DROPDOWNLIST | WS_TABSTOP | WS_VSCROLL
+    LTEXT           "Voice t&ype:", IDC_VARIANT_LABEL, 216, 42, 44, 9
+    COMBOBOX        IDC_VARIANT, 262, 40, 62, 200,
+                    CBS_DROPDOWNLIST | WS_TABSTOP | WS_VSCROLL
+    LTEXT           "", IDC_NOTE, 16, 58, 310, 10
+
+    GROUPBOX        "Speech parameters (0 = engine minimum, 100 = engine maximum)",
+                    IDC_GROUP_PARAMS, 8, 76, 324, 120
+
+    LTEXT           "Speaking &rate:", IDC_RATE_LABEL, 16, 92, 90, 9
+    EDITTEXT        IDC_RATE, 110, 90, 40, 13, ES_NUMBER | WS_TABSTOP
+    CONTROL         "", IDC_RATE_SPIN, "msctls_updown32",
+                    UDS_SETBUDDYINT | UDS_ALIGNRIGHT | UDS_ARROWKEYS | UDS_NOTHOUSANDS,
+                    150, 90, 11, 13
+
+    LTEXT           "&Pitch:", IDC_PITCH_LABEL, 16, 110, 90, 9
+    EDITTEXT        IDC_PITCH, 110, 108, 40, 13, ES_NUMBER | WS_TABSTOP
+    CONTROL         "", IDC_PITCH_SPIN, "msctls_updown32",
+                    UDS_SETBUDDYINT | UDS_ALIGNRIGHT | UDS_ARROWKEYS | UDS_NOTHOUSANDS,
+                    150, 108, 11, 13
+
+    LTEXT           "Pitch &modulation:", IDC_PMOD_LABEL, 176, 92, 90, 9
+    EDITTEXT        IDC_PMOD, 270, 90, 40, 13, ES_NUMBER | WS_TABSTOP
+    CONTROL         "", IDC_PMOD_SPIN, "msctls_updown32",
+                    UDS_SETBUDDYINT | UDS_ALIGNRIGHT | UDS_ARROWKEYS | UDS_NOTHOUSANDS,
+                    310, 90, 11, 13
+
+    LTEXT           "&Breathiness:", IDC_BREATH_LABEL, 176, 110, 90, 9
+    EDITTEXT        IDC_BREATH, 270, 108, 40, 13, ES_NUMBER | WS_TABSTOP
+    CONTROL         "", IDC_BREATH_SPIN, "msctls_updown32",
+                    UDS_SETBUDDYINT | UDS_ALIGNRIGHT | UDS_ARROWKEYS | UDS_NOTHOUSANDS,
+                    310, 108, 11, 13
+
+    LTEXT           "Vol&ume:", IDC_VOLUME_LABEL, 16, 128, 90, 9
+    EDITTEXT        IDC_VOLUME, 110, 126, 40, 13, ES_NUMBER | WS_TABSTOP
+    CONTROL         "", IDC_VOLUME_SPIN, "msctls_updown32",
+                    UDS_SETBUDDYINT | UDS_ALIGNRIGHT | UDS_ARROWKEYS | UDS_NOTHOUSANDS,
+                    150, 126, 11, 13
+
+    LTEXT           "&Consonant clarity:", IDC_CLARITY_LABEL, 176, 128, 90, 9
+    EDITTEXT        IDC_CLARITY, 270, 126, 40, 13, ES_NUMBER | WS_TABSTOP
+    CONTROL         "", IDC_CLARITY_SPIN, "msctls_updown32",
+                    UDS_SETBUDDYINT | UDS_ALIGNRIGHT | UDS_ARROWKEYS | UDS_NOTHOUSANDS,
+                    310, 126, 11, 13
+
+    LTEXT           "The 1996 engine cannot synthesise above 4 kHz, so s, f and h are faint. Clarity restores that band; 0 is the original.",
+                    IDC_CLARITY_NOTE, 16, 146, 306, 9
+
+    LTEXT           "&Test text:", IDC_TEXT_LABEL, 16, 164, 90, 9
+    EDITTEXT        IDC_TEXT, 110, 162, 211, 13, ES_AUTOHSCROLL | WS_TABSTOP
+
+    LTEXT           "", IDC_STATUS, 16, 180, 305, 10
+
+    PUSHBUTTON      "&Speak test", IDC_SPEAK, 8, 204, 70, 16, WS_TABSTOP
+    PUSHBUTTON      "Restore &defaults", IDC_DEFAULTS, 84, 204, 84, 16, WS_TABSTOP
+    DEFPUSHBUTTON   "&Apply", IDC_SAVE, 176, 204, 60, 16, WS_TABSTOP
+    PUSHBUTTON      "&Close", IDCANCEL, 242, 204, 60, 16, WS_TABSTOP
+END

@@ -1,0 +1,1 @@
+This is a voice file for the Infovox text-to-speech converters.

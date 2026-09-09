@@ -1,0 +1,6 @@
+# major_version = 1.0 (major=0x01, minor=0x00)
+# development_stage = 0x80 (release)
+# prerelease_version_level = 0
+# region_code = 0x0011 (Finland)
+# version_number = 1.0
+# version_message = 1.0, © 1994 Infovox AB, Sweden.

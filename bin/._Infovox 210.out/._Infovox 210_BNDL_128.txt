@@ -1,0 +1,21 @@
+Owner name: 'InVx' (0x496E5678)
+Owner ID: 0
+Types: (2 entries)
+  0:
+    Type: 'ICN#' (0x49434E23)
+    IDs: (2 entries)
+      0:
+        Local ID: 0
+        Resource ID: 128
+      1:
+        Local ID: 1
+        Resource ID: 129
+  1:
+    Type: 'FREF' (0x46524546)
+    IDs: (2 entries)
+      0:
+        Local ID: 0
+        Resource ID: 128
+      1:
+        Local ID: 1
+        Resource ID: 129

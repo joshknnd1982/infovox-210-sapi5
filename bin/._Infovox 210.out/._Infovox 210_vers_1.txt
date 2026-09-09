@@ -1,0 +1,6 @@
+# major_version = 2.0.2 (major=0x02, minor=0x02)
+# development_stage = 0x60 (beta)
+# prerelease_version_level = 0
+# region_code = 0x0000 (United States)
+# version_number = 2.0.2b0
+# version_message = 2.0.2b0, © 1995, Infovox AB, Sweden.
