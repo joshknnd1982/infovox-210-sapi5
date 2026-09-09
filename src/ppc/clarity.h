@@ -136,7 +136,22 @@ enum class Fric : uint8_t {
     Dh,           // /D/
     H,            // /h/          breathy, low, shaped like the vowel it leads
     X,            // German ach-Laut, Swedish sj, Spanish jota
+
+    // The stops.  These make no sustained noise; each fires a short release
+    // burst straddling the moment the next phone begins, which is where a stop
+    // is actually audible.  Place matters more here than anywhere else: a
+    // labial release is a dull thud low down, an alveolar one is sharp and
+    // high, and getting that wrong is what made an earlier /p/ burst sound like
+    // a stray /s/.
+    StopLabial,      // /b/
+    StopLabialAsp,   // /p/
+    StopAlveolar,    // /d/
+    StopAlveolarAsp, // /t/
+    StopVelar,       // /g/
+    StopVelarAsp,    // /k/
 };
+
+inline bool isStop(Fric k) { return k >= Fric::StopLabial; }
 
 class ConsonantClarity {
 public:
@@ -164,16 +179,25 @@ public:
         // Two fixed noise bands, crossfaded per phone.  Between them they span
         // 1.6 kHz to the top of the band, which is where every fricative this
         // engine has to make lives.
-        lowBand_[0].highpass(sampleRate, 1900.0);
-        lowBand_[1].lowpass(sampleRate, 5200.0);
-        highBand_[0].highpass(sampleRate, 4200.0);
-        highBand_[1].lowpass(sampleRate, 9500.0);
+        loBand_[0].highpass(sampleRate, 700.0);
+        loBand_[1].lowpass(sampleRate, 2400.0);
+        midBand_[0].highpass(sampleRate, 1900.0);
+        midBand_[1].lowpass(sampleRate, 5200.0);
+        hiBand_[0].highpass(sampleRate, 4200.0);
+        hiBand_[1].lowpass(sampleRate, 9500.0);
+
+        // A stop release: a few milliseconds either side of the next phone.
+        // Short enough to be heard as a release rather than as a fricative,
+        // which is what a 30 ms one had been mistaken for.
+        burstLead_ = uint64_t(0.006 * sampleRate);
+        burstTail_ = uint64_t(0.011 * sampleRate);
 
         // Envelope of the engine's own speech, used as the level reference so
         // frication scales with the voice without further calibration.  The
         // long release is what makes it a reference rather than a waveform
         // follower: a 4 ms envelope swings from zero to full inside a single
         // glottal period, and noise multiplied by that buzzes.
+        fallbackFade_ = 1.0 - std::exp(-1.0 / (0.150 * sampleRate));
         speechUp_   = 1.0 - std::exp(-1.0 / (0.030 * sampleRate));
         speechDown_ = 1.0 - std::exp(-1.0 / (0.400 * sampleRate));
         // Onset and offset of one phone's noise.  Both are short -- a fricative
@@ -191,12 +215,17 @@ public:
     bool active() const { return amount_ > 0; }
 
     void reset() {
-        lowBand_[0].reset(); lowBand_[1].reset();
-        highBand_[0].reset(); highBand_[1].reset();
+        loBand_[0].reset(); loBand_[1].reset();
+        midBand_[0].reset(); midBand_[1].reset();
+        hiBand_[0].reset(); hiBand_[1].reset();
         shelf_.reset();
         dc_.reset();
         speech_ = peak_ = 0.0;
-        curGain_ = curMix_ = 0.0;
+        fallback_ = kLevelFloor;
+        curGain_ = 0.0;
+        curW_[0] = curW_[1] = curW_[2] = 0.0;
+        burst_ = Fric::Voiced;
+        burstEnd_ = 0;
     }
 
     // Clears the phoneme schedule and the playback position.  Call once per
@@ -207,6 +236,8 @@ public:
         pos_ = 0;
         target_ = Fric::Voiced;
         phoneEnd_ = 0;
+        burst_ = Fric::Voiced;
+        burstEnd_ = 0;
     }
 
     // A phoneme starts at `sampleOffset` frames into the utterance.  Offsets
@@ -243,16 +274,41 @@ public:
 
             // A voiceless fricative can be pure digital silence in this engine
             // -- the /s/ that opens a Danish sentence measures 20 counts rms --
-            // so the level reference cannot come from the audio alone or the
-            // first consonant of an utterance would get nothing.  The floor is
-            // about a third of ordinary speech, and real speech overrides it
-            // within 30 ms of the utterance starting.
-            double ref = speech_ > kLevelFloor ? speech_ : kLevelFloor;
+            // so a consonant at the very start of an utterance has nothing to
+            // scale itself to and needs a fallback.
+            //
+            // The fallback must not outlast its purpose: held as a minimum
+            // throughout, it shouted on the quietest voices, putting the Danish
+            // child voice's frication 9 dB over its own speech.  But dropping
+            // it the instant the utterance is heard is worse still -- that is a
+            // 17 dB step, and whether a word-initial consonant lands before or
+            // after it is a matter of a few milliseconds.  The letters d and b
+            // differ by exactly that: d releases at 160 ms and got the
+            // fallback, b releases at 170 ms and did not, so b came out 16 dB
+            // quieter than d for no reason at all.  So it fades instead, over
+            // about 150 ms from the moment real speech appears, by which time
+            // the voice's own level has taken over.
+            if (peak_ > kUtteranceStarted) fallback_ -= fallback_ * fallbackFade_;
+            double ref = 0.35 * peak_;
+            if (speech_ > ref) ref = speech_;
+            if (fallback_ > ref) ref = fallback_;
             // Once the utterance is well and truly over, stop: the last phone
             // has no successor to switch the schedule, and trailing silence
             // must stay silent.
             double duck = peak_ > 0.0 ? speech_ / (0.05 * peak_) : 1.0;
             if (duck > 1.0) duck = 1.0;
+
+            // A stop is silent until it is released, and the release is the
+            // moment the next phone begins.  The schedule runs a buffer ahead
+            // of the audio, so that moment is known before it arrives and the
+            // burst can straddle it the way a real one does.
+            if (isStop(target_) && next_ < sched_.size()) {
+                uint64_t rel = sched_[next_].at;
+                if (pos_ + burstLead_ >= rel) {
+                    burst_ = target_;
+                    burstEnd_ = rel + burstTail_;
+                }
+            }
 
             // Advance the phoneme schedule.
             while (next_ < sched_.size() && sched_[next_].at <= pos_) {
@@ -263,39 +319,42 @@ public:
             // A phone that outlives its plausible duration stops: the engine
             // may follow it with silence and no further callback.
             Fric want = (pos_ >= phoneEnd_) ? Fric::Voiced : target_;
+            if (isStop(want)) want = Fric::Voiced;      // silent until released
+            if (pos_ < burstEnd_) want = burst_;        // and this is the release
 
-            double wantGain = 0.0, wantMix = 0.0;
-            shapeOf(want, &wantGain, &wantMix);
+            double wantGain = 0.0, ww[3] = {0, 0, 0};
+            shapeOf(want, &wantGain, ww);
             wantGain *= duck;
             curGain_ += (wantGain - curGain_) * (wantGain > curGain_ ? attack_ : release_);
-            curMix_  += (wantMix  - curMix_)  * attack_;
+            for (int k = 0; k < 3; ++k)
+                curW_[k] += (ww[k] - curW_[k]) * attack_;
 
+            // The bands run whether or not they are wanted, so a phone never
+            // starts on a transient left over in a filter.
+            double n = noise();
+            double b0 = loBand_[1].process(loBand_[0].process(n));
+            double b1 = midBand_[1].process(midBand_[0].process(n));
+            double b2 = hiBand_[1].process(hiBand_[0].process(n));
             double y = x;
             if (curGain_ > 1e-4) {
-                double n = noise();
-                double lo = lowBand_[1].process(lowBand_[0].process(n));
-                double hi = highBand_[1].process(highBand_[0].process(n));
-                // Both bands are normalised to about unit RMS so `gain_` means
-                // the same thing whichever is selected.
-                // Equal-power crossfade.  Measured over 200k samples, the two
-                // bands come out at 0.311 and 0.392 RMS from a 0.577 RMS
-                // source, so those are the gains that make each of them unit
-                // level; and because a shared source run through a 1.9-5.2 kHz
-                // and a 4.2-9.5 kHz filter is anti-correlated (rho = -0.248),
-                // a plain crossfade loses 4.2 dB in the middle of its travel.
-                // That was quietest for exactly the phones that needed it most
-                // -- /tS/, /S/, /f/ and /v/ all sit near the middle.
-                double w1 = 1.0 - curMix_, w2 = curMix_;
-                double p = w1 * w1 + w2 * w2 - 0.496 * w1 * w2;
-                double band = (w1 * lo * 3.218 + w2 * hi * 2.554) /
+                // Measured over 300k samples, the three bands come out at
+                // 0.2328, 0.3112 and 0.3917 RMS from a 0.5775 RMS source, so
+                // those reciprocals are what put each of them at unit level.
+                // One source through three overlapping filters is correlated,
+                // and negatively -- rho(L,M) -0.089, rho(L,H) -0.284,
+                // rho(M,H) -0.248 -- so adding them without accounting for that
+                // loses up to 4.2 dB, and loses most where two bands are mixed
+                // evenly, which is /tS/, /S/, /f/ and /v/.
+                double p = curW_[0] * curW_[0] + curW_[1] * curW_[1] +
+                           curW_[2] * curW_[2] +
+                           2.0 * (-0.0892 * curW_[0] * curW_[1] +
+                                  -0.2836 * curW_[0] * curW_[2] +
+                                  -0.2475 * curW_[1] * curW_[2]);
+                double band = (curW_[0] * b0 * 4.2946 +
+                               curW_[1] * b1 * 3.2130 +
+                               curW_[2] * b2 * 2.5528) /
                               std::sqrt(p > 1e-6 ? p : 1e-6);
                 y += gain_ * curGain_ * ref * band;
-            } else {
-                // Keep the filters running so a phone never starts on a
-                // transient from stale state.
-                double n = noise();
-                lowBand_[1].process(lowBand_[0].process(n));
-                highBand_[1].process(highBand_[0].process(n));
             }
             samples[i] = clip(y * makeup_);
             ++pos_;
@@ -305,15 +364,16 @@ public:
 private:
     struct Sched { uint64_t at; Fric kind; };
 
-    // Level a fricative is given when the engine has produced nothing to
-    // scale it to.  A voiceless fricative is often digital silence here, so an
-    // utterance that opens with one -- "spot", "see", "Sofie" -- has no
-    // reference at all, and the old 1150 left those 11.7 dB below the same
-    // consonant mid-utterance, which is what made a word-initial /s/ before a
-    // stop sound dropped.  Measured over 485 fricative onsets on all 55 voices,
-    // the reference lands at a median of 4412 (p10 2301, p90 7314); 3000 sits
-    // just under that without shouting on the quietest voices.
-    static constexpr double kLevelFloor = 3000.0;
+    // Level a fricative is given while the engine has produced nothing to scale
+    // it to.  Measured over 485 fricative onsets on all 55 voices, the
+    // reference lands at a median of 4412 (p10 2301, p90 7314); 3600 sits just
+    // under that without shouting on the quietest voices.
+    static constexpr double kLevelFloor = 3600.0;
+
+    // Mean-|x| above which this utterance counts as having started, so the
+    // fallback can begin to fade.  Well under any real speech, well over the
+    // 20-count noise floor a "silent" voiceless fricative leaves behind.
+    static constexpr double kUtteranceStarted = 250.0;
 
     static int16_t clip(double y) {
         return int16_t(y > 32767.0 ? 32767 : y < -32768.0 ? -32768 : y);
@@ -325,22 +385,47 @@ private:
     // /S/ carry frication as loud as a weak vowel, /f/ and /T/ much less, and
     // the voiced members of each pair about half, because their voicing is
     // already there in the engine's output.
-    static void shapeOf(Fric k, double* gain, double* mix) {
+    // Level, and how the noise is spread over the three bands.  The fricatives
+    // use the middle and top pair; only the stops reach down into the low band,
+    // which is what makes a labial release sound like one.
+    static void shapeOf(Fric k, double* gain, double w[3]) {
+        double m = 0.0;   // the old middle-to-top mix, for everything but a stop
+        w[0] = 0.0;
         switch (k) {
-            case Fric::S:      *gain = 1.00; *mix = 0.95; break;
-            case Fric::Z:      *gain = 0.58; *mix = 0.95; break;
-            case Fric::Sh:     *gain = 0.95; *mix = 0.30; break;
-            case Fric::Zh:     *gain = 0.48; *mix = 0.30; break;
-            case Fric::Ch:     *gain = 0.92; *mix = 0.52; break;
-            case Fric::Jh:     *gain = 0.62; *mix = 0.52; break;
-            case Fric::F:      *gain = 0.52; *mix = 0.62; break;
-            case Fric::V:      *gain = 0.44; *mix = 0.62; break;
-            case Fric::Th:     *gain = 0.42; *mix = 0.70; break;
-            case Fric::Dh:     *gain = 0.30; *mix = 0.70; break;
-            case Fric::H:      *gain = 0.38; *mix = 0.20; break;
-            case Fric::X:      *gain = 0.50; *mix = 0.12; break;
-            default:           *gain = 0.00; *mix = 0.00; break;
+            case Fric::S:      *gain = 1.00; m = 0.95; break;
+            case Fric::Z:      *gain = 0.58; m = 0.95; break;
+            case Fric::Sh:     *gain = 0.95; m = 0.30; break;
+            case Fric::Zh:     *gain = 0.48; m = 0.30; break;
+            case Fric::Ch:     *gain = 0.92; m = 0.52; break;
+            // An affricate release is brief and intense.  At 0.62 the /dZ/ of
+            // "jay", and of the letter j, sat 18 dB under the vowel behind it
+            // and was simply not there.
+            case Fric::Jh:     *gain = 0.95; m = 0.52; break;
+            case Fric::F:      *gain = 0.52; m = 0.62; break;
+            case Fric::V:      *gain = 0.44; m = 0.62; break;
+            case Fric::Th:     *gain = 0.42; m = 0.70; break;
+            case Fric::Dh:     *gain = 0.30; m = 0.70; break;
+            case Fric::H:      *gain = 0.38; m = 0.20; break;
+            case Fric::X:      *gain = 0.50; m = 0.12; break;
+
+            // Release bursts, by place of articulation.
+            case Fric::StopLabial:
+                *gain = 0.34; w[0] = 1.00; w[1] = 0.18; w[2] = 0.00; return;
+            case Fric::StopLabialAsp:
+                *gain = 0.40; w[0] = 1.00; w[1] = 0.22; w[2] = 0.00; return;
+            case Fric::StopAlveolar:
+                *gain = 0.56; w[0] = 0.28; w[1] = 0.85; w[2] = 0.30; return;
+            case Fric::StopAlveolarAsp:
+                *gain = 0.62; w[0] = 0.25; w[1] = 0.85; w[2] = 0.34; return;
+            case Fric::StopVelar:
+                *gain = 0.48; w[0] = 0.72; w[1] = 0.70; w[2] = 0.06; return;
+            case Fric::StopVelarAsp:
+                *gain = 0.54; w[0] = 0.70; w[1] = 0.72; w[2] = 0.08; return;
+
+            default:           *gain = 0.00; m = 0.00; break;
         }
+        w[1] = 1.0 - m;
+        w[2] = m;
     }
 
     // Longest a phone may keep making noise, in frames.  The last phoneme of an
@@ -366,13 +451,17 @@ private:
         return double(int32_t(rng_ & 0xFFFFFF00u)) * (1.0 / 2147483648.0);
     }
 
-    Biquad lowBand_[2], highBand_[2], shelf_;
+    Biquad loBand_[2], midBand_[2], hiBand_[2], shelf_;
     DcBlocker dc_;
     uint32_t rng_ = 22050;
     double fs_ = 22050.0;
     double gain_ = 0.0, makeup_ = 1.0;
     double speechUp_ = 0.0, speechDown_ = 0.0, attack_ = 0.0, release_ = 0.0;
-    double speech_ = 0.0, peak_ = 0.0, curGain_ = 0.0, curMix_ = 0.0;
+    double speech_ = 0.0, peak_ = 0.0, curGain_ = 0.0;
+    double fallback_ = kLevelFloor, fallbackFade_ = 0.0;
+    double curW_[3] = {0, 0, 0};
+    uint64_t burstLead_ = 0, burstTail_ = 0, burstEnd_ = 0;
+    Fric     burst_ = Fric::Voiced;
     double maxRun_ = 0.140;
     int amount_ = 0;
 

@@ -48,10 +48,15 @@ constexpr uint32_t dbBufferReady = 1, dbLastBuffer = 4;
 // German ach-Laut but the Spanish /tS/.
 //
 // Anything unlisted is Voiced, which synthesises nothing, so a language whose
-// symbol is not recognised is left exactly as the engine rendered it.  The
-// stops are deliberately unlisted: a synthesised release burst is a plain
-// click of noise with no formant transition behind it, and after a /p/ it is
-// heard as a faint stray /s/ -- audible in "reproduce".
+// symbol is not recognised is left exactly as the engine rendered it.
+//
+// The stops are listed by place, not as one class.  The engine gives them no
+// release at all -- the /d/ of "desktop" is a 30 ms ramp into the vowel and
+// nothing else -- so the release has to be synthesised, and a release is
+// identified by where in the mouth it happened.  An earlier version used one
+// burst for all of them, centred too high, and after a /p/ that was heard as a
+// stray /s/ in "reproduce"; a labial release belongs an octave lower than an
+// alveolar one.
 Fric fricationFor(const std::string& sym, const std::string& pack) {
     struct Entry { const char* sym; Fric kind; };
     static const Entry kMap[] = {
@@ -68,6 +73,15 @@ Fric fricationFor(const std::string& sym, const std::string& pack) {
         {"dh", Fric::Dh},    {"DH", Fric::Dh},
         {"hh", Fric::H},     {"H", Fric::H},
         {"X", Fric::X},      {"KJ", Fric::X},     {"GH", Fric::X},
+
+        // Stops, by place.  These cover all eleven packs: the Scandinavian
+        // retroflex "2D"/"2T", the Icelandic aspirated "KH", and the plain
+        // Roman letters everywhere else.
+        {"B", Fric::StopLabial},      {"P", Fric::StopLabialAsp},
+        {"D", Fric::StopAlveolar},    {"T", Fric::StopAlveolarAsp},
+        {"2D", Fric::StopAlveolar},   {"2T", Fric::StopAlveolarAsp},
+        {"G", Fric::StopVelar},       {"K", Fric::StopVelarAsp},
+        {"KH", Fric::StopVelarAsp},
     };
     if (sym.empty()) return Fric::Voiced;
     // CH is the only symbol two packs disagree about: the Spanish /tS/ against

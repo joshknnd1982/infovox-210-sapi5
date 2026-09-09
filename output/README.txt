@@ -1,4 +1,4 @@
-Infovox 210 SAPI5 1.5.0
+Infovox 210 SAPI5 1.6.0
 =======================
 
 What this is
@@ -53,8 +53,11 @@ So the frication is synthesised here, and it is placed from the engine's own
 phoneme stream rather than guessed from the audio: the engine reports every
 phone it speaks, and each language pack carries its own symbol table, so each
 consonant gets noise of the right kind, in the right place, at a level that
-follows the voice.  A shelf also lifts what the engine does produce above
-2.6 kHz.  The Consonant clarity setting controls how much of this is applied:
+follows the voice.  The stops get a release burst too, one per place of
+articulation and fired where the release happens -- without it a d or a b is
+only a silent ramp into the vowel after it.  A shelf also lifts what the engine
+does produce above 2.6 kHz.  The Consonant clarity setting controls how much
+of this is applied:
 
     0    the untouched 1996 output
     40   the default a fresh install uses

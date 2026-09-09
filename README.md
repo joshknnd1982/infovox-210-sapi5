@@ -261,15 +261,41 @@ members of each pair quieter because their voicing is already there. Levels
 follow the engine's own speech, so frication tracks the voice and the speaking
 rate. A high shelf still lifts what the engine does produce above 2.6 kHz.
 
-The stops get nothing. A synthesised release burst is a bare click of noise with
-no formant transition behind it, and after a */p/* it is heard as a stray *s* —
-plainly, in the word *reproduce*.
+The stops get a release burst, one per place of articulation. The engine gives
+them no release at all — the */d/* of *desktop* is a 30 ms ramp into the vowel
+and nothing else — so it has to be synthesised, and it is fired at the moment
+the next phone begins, which is where a stop is actually audible rather than
+where its phoneme starts. Place is what makes it work: a labial release is a
+dull thud low down, an alveolar one is sharp and high. An earlier version used
+one burst for all six, centred too high, and after a */p/* that was heard as a
+stray *s* — plainly, in the word *reproduce*.
 
 The **Consonant clarity** setting controls how much; `0` gives the untouched
 1996 output, and a fresh install uses `40`. `tools/verify_clarity.py` checks the
 result on every installed voice by rendering each one twice, with clarity off
 and on, and attributing the difference phone by phone against the engine's own
 phoneme stream.
+
+### What 1.6.0 fixed
+
+* **The stops had no release at all.** They were given none in 1.5.0, after a
+  single mis-centred burst class had been heard as a stray *s*. But the engine
+  synthesises no burst either, so */d/*, */b/* and */g/* were left as a silent
+  ramp into the following vowel — the *d* of *desktop* was inaudible. They now
+  get one burst per place, fired at the release rather than at the start of the
+  phoneme, and a third noise band down at 700–2400 Hz so that a labial release
+  is a thud rather than a hiss. Measured, a */p/* release now puts 67 % of its
+  energy below 2.4 kHz, and the check enforces that on every voice.
+* **The affricates were too quiet to hear.** */dZ/* at 0.62 sat 18 dB under the
+  vowel behind it, so the letters *j* and *g* came out as bare vowels. Now
+  −5.3 dB and −7.1 dB against the speech level.
+* **The level fallback fell off a cliff.** It applied in full until an utterance
+  was judged to have started and then vanished — a 17 dB step, and whether a
+  word-initial consonant landed before or after it was a matter of a few
+  milliseconds. The letters *d* and *b* straddled it exactly: *d* releases at
+  160 ms and got the fallback, *b* releases at 170 ms and did not, leaving *b*
+  16 dB quieter for no reason. It now fades over about 150 ms instead, and the
+  two are within 5 dB of each other.
 
 ### What 1.5.0 fixed
 
