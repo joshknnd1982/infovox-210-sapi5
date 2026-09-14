@@ -131,8 +131,9 @@ void loadIntoUi(HWND dlg) {
     g_loading = false;
 }
 
-void saveFromUi(HWND dlg) {
-    if (g_loading) return;
+bool saveFromUi(HWND dlg) {
+    if (g_loading) return false;
+    bool saved;
     if (customSelected(dlg)) {
         CustomVoiceSettings s;
         s.voiceId = customVoiceIdFromUi(dlg);
@@ -142,15 +143,25 @@ void saveFromUi(HWND dlg) {
         s.breath = getInt(dlg, IDC_BREATH);
         s.volume = getInt(dlg, IDC_VOLUME);
         s.clarity = getInt(dlg, IDC_CLARITY);
-        saveCustomVoice(s);
+        saved = saveCustomVoice(s);
     } else {
         VoiceTweaks t;
         t.pitchMod = getInt(dlg, IDC_PMOD);
         t.breath = getInt(dlg, IDC_BREATH);
         t.clarity = getInt(dlg, IDC_CLARITY);
-        saveVoiceTweaks(selectedVoiceId(dlg), t);
+        saved = saveVoiceTweaks(selectedVoiceId(dlg), t);
     }
-    setStatus(dlg, L"Settings saved.");
+    if (saved) {
+        setStatus(dlg, L"Settings saved.");
+    } else {
+        // A file can fail to save where a registry value would not -- locked,
+        // read-only, or a profile folder that is not writable -- so say so.
+        std::wstring msg = L"Could not save the settings";
+        if (!settingsPath().empty()) msg += L" to " + settingsPath();
+        msg += L".";
+        setStatus(dlg, msg.c_str());
+    }
+    return saved;
 }
 
 // Speaks through SAPI itself, which is the one path that exercises everything
@@ -209,8 +220,7 @@ void restoreDefaults(HWND dlg) {
     setInt(dlg, IDC_VOLUME, 100);
     setInt(dlg, IDC_CLARITY, 40);
     g_loading = false;
-    saveFromUi(dlg);
-    setStatus(dlg, L"Defaults restored.");
+    if (saveFromUi(dlg)) setStatus(dlg, L"Defaults restored.");
 }
 
 void populate(HWND dlg) {

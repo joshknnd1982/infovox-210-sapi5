@@ -1,4 +1,4 @@
-Infovox 210 SAPI5 1.6.0
+Infovox 210 SAPI5 1.6.1
 =======================
 
 What this is
@@ -98,6 +98,23 @@ slowest or lowest setting, at 100 its fastest or highest.
 SAPI has no slider for pitch modulation, breathiness or consonant clarity, so
 those are set per voice in the settings dialog.  It is in the Start menu under
 Infovox 210 Settings, and setup can also put a shortcut on the desktop.
+
+Where your settings are kept
+----------------------------
+Everything you set in Infovox 210 Settings is kept in one file per user:
+
+    %APPDATA%\Infovox210\settings.ini
+
+Nothing you set is stored in the registry; the only registry entries are the
+voice registrations SAPI itself requires, which setup writes.  The file is
+plain text and safe to edit by hand, and a saved change is heard on the next
+thing spoken.  Uninstalling leaves it in place, so a reinstall keeps your
+settings.
+
+Versions up to 1.6.0 kept these settings in the registry, under
+HKEY_CURRENT_USER\Software\Infovox210.  The first time the settings dialog or
+a voice is used after upgrading, they are moved into the file and that
+registry key is removed.
 
 Parts
 -----

@@ -389,6 +389,24 @@ those are set per voice in **Infovox 210 Settings**. There is also an **Infovox
 210 Custom Voice** token whose language, variant and every parameter come from
 that dialog.
 
+### Where settings are kept
+
+Everything set in that dialog is kept per user, in one plain INI file:
+
+```
+%APPDATA%\Infovox210\settings.ini
+```
+
+It is safe to edit by hand, and the engine reads it at the start of every
+utterance, so a change is heard on the next thing spoken. Nothing a user sets is
+stored in the registry: the only registry entries are the COM class and the
+voice tokens, which SAPI requires and the installer writes once. Uninstalling
+leaves the file in place, so settings survive a reinstall.
+
+Up to 1.6.0 these settings were kept in `HKEY_CURRENT_USER\Software\Infovox210`.
+The first time the engine or the dialog runs after an upgrade, it moves them
+into the file and removes that key.
+
 ---
 
 ## Installing

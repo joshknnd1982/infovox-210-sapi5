@@ -5,7 +5,7 @@
 ; resource pack per language the user chooses.
 
 #define AppName "Infovox 210 SAPI5"
-#define AppVersion "1.6.0"
+#define AppVersion "1.6.1"
 #define AppPublisher "Infovox 210 SAPI5 project"
 #define SourceDir "..\output"
 
@@ -98,6 +98,10 @@ Name: "{group}\Uninstall {#AppName}";   Filename: "{uninstallexe}"
 Filename: "{app}\InfovoxConfig.exe"; Description: "Open Infovox 210 settings"; Flags: postinstall nowait skipifsilent unchecked
 
 [UninstallDelete]
+; Settings are left alone on purpose.  They are per user, in
+; %APPDATA%\Infovox210\settings.ini, so reinstalling keeps them -- and Setup
+; runs elevated, where {userappdata} can be an administrator's folder rather
+; than that of the person who uses the voices.
 Type: filesandordirs; Name: "{app}\engine"
 Type: dirifempty;     Name: "{app}\x64"
 Type: dirifempty;     Name: "{app}"

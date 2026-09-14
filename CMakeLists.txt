@@ -99,7 +99,7 @@ if(NOT BUILD_X64)
         ${CMAKE_CURRENT_SOURCE_DIR}/src/sapi
         ${CMAKE_CURRENT_SOURCE_DIR}/tools)
     target_link_libraries(InfovoxConfig PRIVATE
-        comctl32 ole32 oleaut32 advapi32 user32 gdi32 shlwapi sapi)
+        comctl32 ole32 oleaut32 advapi32 user32 gdi32 shlwapi shell32 sapi)
     infovox_target_defaults(InfovoxConfig)
 
     add_executable(InfovoxDiagnostics

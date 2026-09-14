@@ -6,6 +6,8 @@
 #include <ctime>
 #include <share.h>
 
+#include "user_settings.hpp"
+
 // Diagnostic log, on by default while the engine is still settling.
 //
 // Written to %LOCALAPPDATA%\Infovox210\infovox210.log, which is writable without
@@ -13,9 +15,10 @@
 // application is speaking. Every line carries the process name, its bitness and its pid,
 // because a single utterance from a 64-bit host crosses two processes.
 //
-// Turn it off without reinstalling by creating this registry value:
-//   HKCU\Software\Infovox210  DWORD  Logging = 0
-// and back on with Logging = 1. The value is read once per process.
+// Turn it off without reinstalling by adding this to %APPDATA%\Infovox210\settings.ini:
+//   [General]
+//   Logging=0
+// and back on with Logging=1. The value is read once per process.
 //
 // The file is capped and rotated to one previous copy, so leaving it on cannot fill a
 // disk during a long session.
@@ -45,25 +48,15 @@ inline bool BuildLogPath(wchar_t* path, size_t size, const wchar_t* suffix)
     return swprintf_s(path, size, L"%s\\infovox210%s.log", dir, suffix) >= 0;
 }
 
-// Read once per process: a hot path should not touch the registry per line.
+// Read once per process: a hot path should not read the settings file per line.
 inline bool Enabled()
 {
     static int cached = -1;
     if (cached < 0) {
-        cached = 1;
-        HKEY key = nullptr;
-        if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Infovox210", 0, KEY_READ, &key)
-            == ERROR_SUCCESS) {
-            DWORD value = 1;
-            DWORD size = sizeof(value);
-            DWORD type = 0;
-            if (RegQueryValueExW(key, L"Logging", nullptr, &type,
-                                 reinterpret_cast<LPBYTE>(&value), &size) == ERROR_SUCCESS &&
-                type == REG_DWORD) {
-                cached = (value != 0) ? 1 : 0;
-            }
-            RegCloseKey(key);
-        }
+        int value = 1;
+        Infovox::sapi::iniReadInt(Infovox::sapi::loadSettings(),
+                                  Infovox::sapi::kGeneralSection, L"Logging", &value);
+        cached = (value != 0) ? 1 : 0;
     }
     return cached == 1;
 }
