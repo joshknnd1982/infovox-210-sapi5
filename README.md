@@ -480,8 +480,9 @@ otherwise simply be lost. If a rights holder objects, it will be taken down.
 
 The Windows port — the PEF loader, the Mac OS runtime, the SAPI5 engines, the
 worker, the settings dialog and the tooling, everything under `src/`, `tools/`
-and `installer/` — is released into the public domain, so anyone can do the same
-for another engine.
+and `installer/` — is licensed under the MIT License (see [LICENSE](LICENSE)),
+so anyone can do the same for another engine. The Infovox 210 engine and its
+voices, and Unicorn, are not covered by that licence; see [NOTICE.md](NOTICE.md).
 
 Unicorn is licensed under the GPLv2 by its own authors; see
 [unicorn-engine.org](https://www.unicorn-engine.org/).
