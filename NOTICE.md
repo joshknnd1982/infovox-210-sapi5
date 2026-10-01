@@ -40,3 +40,22 @@ is released under LGPL2. See COPYING.LGPL2 in root directory for more details"; 
 Unicorn Engine by Eric Poole, 2022, "Copyright 2022 Aptiv". Those notices are left exactly as they are. The
 licence file they point to (`COPYING.LGPL2`) is not part of this repository; see
 [unicorn-engine.org](https://www.unicorn-engine.org/).
+
+## Source files taken from other projects
+
+Some files in this repository are copies of, or adapted from, files in two SAPI 5 projects published on GitHub by
+gozaltech: [espeak-ng-sapi](https://github.com/gozaltech/espeak-ng-sapi), which is published under the GPL-3.0,
+and [BstSpeech-sapi](https://github.com/gozaltech/BstSpeech-sapi), which has no licence file. They are not covered
+by the MIT License of this project and stay under their author's terms.
+
+Copied, with at most the namespace and small details changed:
+
+- `src/sapi/com.hpp` and `src/sapi/com.cpp`
+- `src/sapi/registry.hpp` and `src/sapi/registry.cpp`
+- `src/sapi/utils.hpp`
+- `installer/innosetup_code.iss` and `installer/post_process_iss.cmake`
+
+Adapted from the file of the same role in those projects:
+
+- `src/sapi/ISpTTSEngineImpl.hpp`
+- `src/sapi/sapi_main.cpp`
